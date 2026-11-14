@@ -173,9 +173,11 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 | Fuzzy title matching | Deferred | Exact normalised matching meets the brief; fuzzy matching needs tuning and a test set. |
 | Million-vector synthetic benchmark | Deferred | Part 2 or Part 3; the real crossover data above already answers the brief's question at this size. |
 | Relevance evaluation (self-claim retrieval with leakage controls, hand-reviewed queries) | Deferred | Needed before BM25 or model comparisons; a candidate for Part 3. |
-| "Find patents similar to this patent ID" | Deferred | Small and useful, outside the first milestone. Must exclude the patent itself. |
+| "Find patents similar to this patent ID" | **Planned: will be built** | Input a patent number from the dataset; its abstract and independent claims become the query, the patent itself is excluded from the results, and all filters still apply. Covers the brief's example input "an entire patent (given by patent ID)". |
 | Restricting search to claims or descriptions only | Deferred | Small; outside the first milestone. |
 | Flagging identical abstracts as possibly related | Deferred | Needs a careful label; identical text is not proof of a patent family. |
+| Links that open the patent at the matching passage | Deferred, if time allows | Planned with browser text fragments (`#:~:text=...`), one link per excerpt; needs a check that Google Patents' page text matches our passages. If the words aren't found, the link still opens the patent. |
+| "Related by meaning" section after strict results | Deferred, if time allows | A separate, labelled list shown on expand: the same query re-run without the keyword filters (classification stays strict), skipping patents already shown. Unlike the rejected semantic filter (D11), strict results keep their meaning and no similarity cut-off is needed. |
 | Feature-to-evidence mapping | Rejected for Part 1 | Several retrievals per query and complex aggregation, for a workflow not asked for. |
 | Scraping patents not in the dataset | Rejected | A reliable local system matters more than an unreliable scraper; documented as an extension. |
 | Process memory measurement | Skipped | Index sizes are reported (53 MB vectors, 44 MB metadata); readings on Windows add noise rather than insight. |
