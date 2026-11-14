@@ -31,6 +31,13 @@ import numpy as np
 from .text_utils import normalize_title, parse_keywords
 
 STRATEGIES = ("prefilter", "mask", "postfilter", "auto")
+# A result shows up to this many matching pieces of its patent.
+MAX_EXCERPTS = 3
+# An extra piece is shown only if it scores within this much of the
+# patent's best piece. Measured on 12 test queries: the 2nd-best piece is a
+# median 0.05 below the best, the 3rd-best 0.075; a 0.10 margin keeps the
+# 2nd for 80% of top-10 results and the 3rd for 66% (see DECISIONS.md D16).
+EXCERPT_MARGIN = 0.10
 # "auto" copies out the surviving units only when they are at most this
 # share of the index. Set from benchmarks/results.md: on an 8-core laptop
 # prefilter beat mask at 5-6% of units and lost from about 9% upwards; on a
@@ -57,6 +64,14 @@ class Filters:
 
 
 @dataclass
+class Excerpt:
+    label: str   # "Claim 4", "Description para 12", "Abstract"
+    note: str    # caveats, e.g. "claim number inferred"
+    text: str
+    score: float
+
+
+@dataclass
 class Result:
     rank: int
     patent_id: str
@@ -65,9 +80,13 @@ class Result:
     publication_date: str
     url: str
     score: float
-    excerpt_label: str   # "Claim 4", "Description para 12", "Abstract"
-    excerpt_note: str    # caveats about the excerpt, e.g. "claim number inferred"
+    excerpt_label: str   # the best-matching piece: "Claim 4", "Description para 12"
+    excerpt_note: str    # caveats about it, e.g. "claim number inferred"
     excerpt_text: str
+    # Every piece shown, best first (empty when there was no query).
+    excerpts: list[Excerpt] = field(default_factory=list)
+    # Further pieces within EXCERPT_MARGIN of the best that were not shown.
+    more_close_matches: int = 0
 
 
 @dataclass
@@ -299,11 +318,13 @@ class PatentSearch:
     # -- search -----------------------------------------------------------
     def search(self, query: str = "", filters: Filters | None = None, top_k: int = 10,
                strategy: str = "auto",
-               query_vector: np.ndarray | None = None) -> SearchReport:
+               query_vector: np.ndarray | None = None,
+               max_excerpts: int = MAX_EXCERPTS) -> SearchReport:
         """Run one search.
 
         query_vector lets a caller that already embedded the query (the
-        benchmark) skip the embedding step.
+        benchmark) skip the embedding step. max_excerpts caps how many
+        matching pieces each result shows.
         """
         if strategy not in STRATEGIES:
             raise ValueError(f"strategy must be one of {STRATEGIES}")
@@ -390,25 +411,75 @@ class PatentSearch:
 
         # 5. Fetch the evidence for the winners.
         start = time.perf_counter()
-        report.results = [self._as_result(rank, patent_id, score, row)
+        report.results = [self._as_result(rank, patent_id, score, row, query_vector, max_excerpts)
                           for rank, (patent_id, score, row) in enumerate(ranked, start=1)]
         timings["evidence_ms"] = (time.perf_counter() - start) * 1000
         timings["total_ms"] = (time.perf_counter() - total_start) * 1000
         return report
 
-    def _as_result(self, rank: int, patent_id: str, score: float, row: int | None) -> Result:
+    def _unit_excerpt(self, row: int, score: float) -> Excerpt:
+        unit = self.units[row]
+        notes = [unit["label_note"]] if unit.get("label_note") else []
+        if unit.get("context_label"):
+            notes.append(f"with {unit['context_label']} as context")
+        return Excerpt(label=unit["label"], note="; ".join(notes),
+                       text=unit["display_text"], score=round(float(score), 4))
+
+    def _excerpts(self, patent_id: str, best_row: int, query_vector: np.ndarray,
+                  max_excerpts: int) -> tuple[list[Excerpt], int]:
+        """The patent's best piece, then other pieces scoring close to it.
+
+        Scores only this patent's own block of rows (about 54), so it costs
+        the same whichever filtering strategy ranked the patent. Pieces that
+        are another part of a claim or paragraph already shown, or repeat its
+        text, are skipped: they would show the same evidence twice.
+        """
+        start, end = self.unit_rows_of(patent_id)
+        scores = self.vectors[start:end] @ query_vector
+        best_score = float(scores[best_row - start])
+        best_unit = self.units[best_row]
+        shown = [self._unit_excerpt(best_row, best_score)]
+        seen_keys = {(best_unit["kind"], best_unit["position"])}
+        seen_texts = {best_unit["display_text"]}
+        more = 0
+        for offset in np.argsort(-scores, kind="stable"):
+            row = start + int(offset)
+            if row == best_row:
+                continue
+            if best_score - float(scores[offset]) > EXCERPT_MARGIN:
+                break  # sorted, so nothing further down is close enough
+            unit = self.units[row]
+            key = (unit["kind"], unit["position"])
+            if key in seen_keys or unit["display_text"] in seen_texts:
+                continue
+            seen_keys.add(key)
+            seen_texts.add(unit["display_text"])
+            if len(shown) < max_excerpts:
+                shown.append(self._unit_excerpt(row, scores[offset]))
+            else:
+                more += 1
+        return shown, more
+
+    def unit_rows_of(self, patent_id: str) -> tuple[int, int]:
+        position = self.patent_position[patent_id]
+        return int(self.block_starts[position]), int(self.block_ends[position])
+
+    def _as_result(self, rank: int, patent_id: str, score: float, row: int | None,
+                   query_vector: np.ndarray | None = None,
+                   max_excerpts: int = MAX_EXCERPTS) -> Result:
         patent = self.patents[patent_id]
+        excerpts: list[Excerpt] = []
+        more = 0
         if row is None:
             label, note, text = "Abstract", "", patent["abstract"]
         else:
-            unit = self.units[row]
-            notes = [unit["label_note"]] if unit.get("label_note") else []
-            if unit.get("context_label"):
-                notes.append(f"matched together with {unit['context_label']}, "
-                             "which it depends on")
-            label, note, text = unit["label"], "; ".join(notes), unit["display_text"]
+            best = self._unit_excerpt(row, score)
+            label, note, text = best.label, best.note, best.text
+            if query_vector is not None:
+                excerpts, more = self._excerpts(patent_id, row, query_vector, max(1, max_excerpts))
         return Result(rank=rank, patent_id=patent_id, title=patent["title"],
                       classification=patent["classification"],
                       publication_date=patent["publication_date"], url=patent["url"],
                       score=round(score, 4), excerpt_label=label,
-                      excerpt_note=note, excerpt_text=text)
+                      excerpt_note=note, excerpt_text=text,
+                      excerpts=excerpts, more_close_matches=more)

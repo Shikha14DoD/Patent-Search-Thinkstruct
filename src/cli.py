@@ -13,7 +13,11 @@ import argparse
 import textwrap
 import time
 
-from .search import STRATEGIES, Filters, PatentSearch
+from .search import EXCERPT_MARGIN, MAX_EXCERPTS, STRATEGIES, Filters, PatentSearch
+
+
+def shorten(text: str, full: bool, width: int) -> str:
+    return text if full else textwrap.shorten(text, width=width, placeholder=" …")
 
 
 def main() -> None:
@@ -33,6 +37,8 @@ def main() -> None:
                         help="Match any keyword instead of all of them")
     parser.add_argument("--strategy", choices=STRATEGIES, default="auto",
                         help="How filters are applied; auto picks by selectivity")
+    parser.add_argument("--excerpts", type=int, default=MAX_EXCERPTS,
+                        help="Most matching pieces shown per result")
     parser.add_argument("--full", action="store_true", help="Print whole excerpts")
     args = parser.parse_args()
 
@@ -54,7 +60,8 @@ def main() -> None:
         engine.model
         model_load_s = time.perf_counter() - start
 
-    report = engine.search(args.query, filters, top_k=args.top, strategy=args.strategy)
+    report = engine.search(args.query, filters, top_k=args.top, strategy=args.strategy,
+                           max_excerpts=args.excerpts)
 
     if report.filter_counts:
         print("Filters:")
@@ -79,12 +86,20 @@ def main() -> None:
         print(f"    {result.patent_id} · {result.classification} · "
               f"published {result.publication_date}{score}")
         print(f"    {result.url}")
-        excerpt = result.excerpt_text if args.full else textwrap.shorten(
-            result.excerpt_text, width=240, placeholder=" …")
-        note = f" ({result.excerpt_note})" if result.excerpt_note else ""
-        # Without a query nothing was matched: the abstract is shown as a preview.
-        prefix = "Matched " if args.query else ""
-        print(f"    {prefix}{result.excerpt_label}{note}: {excerpt}")
+        if not result.excerpts:
+            # Without a query nothing was matched: the abstract is a preview.
+            note = f" ({result.excerpt_note})" if result.excerpt_note else ""
+            print(f"    {result.excerpt_label}{note}: {shorten(result.excerpt_text, args.full, 240)}")
+        for number, excerpt in enumerate(result.excerpts):
+            lead = "Matched" if number == 0 else "Also matched"
+            note = f"; {excerpt.note}" if excerpt.note else ""
+            width = 240 if number == 0 else 160
+            print(f"    {lead} {excerpt.label} ({excerpt.score:.3f}{note}): "
+                  f"{shorten(excerpt.text, args.full, width)}")
+        if result.more_close_matches:
+            plural = "s" if result.more_close_matches > 1 else ""
+            print(f"    + {result.more_close_matches} more passage{plural} within "
+                  f"{EXCERPT_MARGIN:.2f} of the best match")
         print()
 
     if args.query:

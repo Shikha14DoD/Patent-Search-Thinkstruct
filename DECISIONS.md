@@ -13,7 +13,7 @@ reversal is part of the record.
 `benchmarks/results.md`, measured on an 8-core Windows 11 laptop with Python 3.12 and NumPy 2.5.
 Token counts use the model's own tokenizer.
 
-Decisions D1 to D7 concern the data; D8 to D14 concern search; D15 records scope.
+Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope.
 
 ---
 
@@ -179,6 +179,17 @@ Decisions D1 to D7 concern the data; D8 to D14 concern search; D15 records scope
 | Feature-to-evidence mapping | Rejected for Part 1 | Several retrievals per query and complex aggregation, for a workflow not asked for. |
 | Scraping patents not in the dataset | Rejected | A reliable local system matters more than an unreliable scraper; documented as an extension. |
 | Process memory measurement | Skipped | Index sizes are reported (53 MB vectors, 44 MB metadata); readings on Windows add noise rather than insight. |
+
+## D16. Show up to three matching pieces per result; keep ranking by the best piece
+- **Status:** Validated (display); ranking change Deferred
+- **Problem:** The first version showed only a patent's best-matching piece. A query often matches several claims or paragraphs of one patent, so the user didn't see them, and a patent with many strong matches looked the same as one with a single match.
+- **Evidence:** Over the top 10 results of 12 test queries, a patent's second-best piece scored a median of 0.050 below its best (90th percentile 0.137), and its third-best 0.075 below. With a 0.10 margin, the second piece qualifies for 80% of results and the third for 66%; with 0.05, only 49% and 32%. Picking pieces naively would have shown the same evidence twice 18 times (another part of the same claim or paragraph, or identical text).
+- **Alternatives:** Show every piece above a fixed score (rejected: scores aren't comparable across queries); show the top 3 regardless of score (rejected: weak third pieces are noise); rank patents by several pieces, for example the sum of their top 3 scores.
+- **Chosen:** Show the best piece, then up to two more that score within 0.10 of it, skipping another part of a piece already shown and repeated text. Count the further pieces within the margin and show that count ("+17 more passages within 0.10 of the best match"). Ranking still uses the best piece only.
+- **Rationale:** The count makes a patent's breadth of matches visible without changing the ranking. Changing how patents are ranked can only be justified by a relevance measurement, which doesn't exist yet.
+- **Trade-offs:** Fetching evidence now scores each top patent's own pieces again: about 0.3 ms per search instead of 0.05 ms, measured on the 2-core sandbox. Patents with many matches still don't rank higher.
+- **Validation:** Unit tests on a hand-made index with known scores check the order, the margin, the cap, de-duplication, and that all filtering strategies give identical excerpts.
+- **Limitations:** The 0.10 margin is tuned on 12 queries for this model; another model's scores would need a new measurement.
 
 ## Caveat on what this system can conclude
 

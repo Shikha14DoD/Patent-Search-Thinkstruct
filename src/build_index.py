@@ -174,6 +174,72 @@ def build_phrase_index(pairs: list[tuple[str, str]]) -> dict[str, str]:
     return {patent_id: " ".join(tokenize(text)) for patent_id, text in pairs}
 
 
+def assemble_bundle(patents, units, model_name: str) -> dict:
+    """Everything the search engine loads besides the vectors.
+
+    Kept apart from main() so tests can build a small index from hand-made
+    patents and vectors, without the model.
+    """
+    titles = [(p.patent_id, p.title) for p in patents]
+    abstracts = [(p.patent_id, p.abstract) for p in patents]
+
+    title_index = build_inverted_index(titles)
+    abstract_index = build_inverted_index(abstracts)
+    # "keywords in the title or abstract" as one box, per the brief
+    title_or_abstract_index: dict[str, set[str]] = {}
+    for source in (title_index, abstract_index):
+        for token, ids in source.items():
+            title_or_abstract_index.setdefault(token, set()).update(ids)
+
+    exact_title_index: dict[str, list[str]] = {}
+    for patent_id, title in titles:
+        exact_title_index.setdefault(normalize_title(title), []).append(patent_id)
+
+    # Classification is matched by prefix, so every prefix of every code gets
+    # its own entry: a "B60B" lookup is then a dict hit, not a scan. The codes
+    # come from the data, so nothing here is specific to vehicle patents.
+    classification_prefix: dict[str, set[str]] = {}
+    for patent in patents:
+        code = patent.classification.upper()
+        for length in range(1, len(code) + 1):
+            classification_prefix.setdefault(code[:length], set()).add(patent.patent_id)
+
+    # Units are generated patent by patent, so each patent owns a contiguous
+    # block of rows. Storing the block bounds lets the search work on whole
+    # blocks instead of looking at units one by one.
+    unit_rows: dict[str, tuple[int, int]] = {}
+    for position, unit in enumerate(units):
+        if unit.patent_id not in unit_rows:
+            unit_rows[unit.patent_id] = (position, position + 1)
+        else:
+            first, _ = unit_rows[unit.patent_id]
+            unit_rows[unit.patent_id] = (first, position + 1)
+
+    # Claim objects are dropped from the stored patent record: the claim text
+    # already lives in the units, and keeping both would double the index.
+    patent_records = {}
+    for patent in patents:
+        record = asdict(patent)
+        for key in ("claims", "raw_paragraphs", "paragraphs", "paragraph_numbers"):
+            record.pop(key, None)
+        record["claim_count"] = len(patent.claims)
+        patent_records[patent.patent_id] = record
+
+    return {
+        "model_name": model_name,
+        "patents": patent_records,
+        "units": [asdict(u) for u in units],
+        "unit_rows": unit_rows,
+        "title_index": title_index,
+        "abstract_index": abstract_index,
+        "title_or_abstract_index": title_or_abstract_index,
+        "title_phrases": build_phrase_index(titles),
+        "abstract_phrases": build_phrase_index(abstracts),
+        "exact_title_index": exact_title_index,
+        "classification_prefix": classification_prefix,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the patent search index.")
     parser.add_argument("--data", default="data/patent_data_small",
@@ -213,72 +279,14 @@ def main() -> None:
     timings["embed_s"] = embed_stats.pop("embed_s")
     print(f"{len(units)} unit vectors ready ({vectors.nbytes / 1e6:.0f} MB)")
 
-    # --- filter indexes ---------------------------------------------------
+    # --- filter indexes and layout ---------------------------------------
     start = time.perf_counter()
-    titles = [(p.patent_id, p.title) for p in patents]
-    abstracts = [(p.patent_id, p.abstract) for p in patents]
-
-    title_index = build_inverted_index(titles)
-    abstract_index = build_inverted_index(abstracts)
-    # "keywords in the title or abstract" as one box, per the brief
-    title_or_abstract_index: dict[str, set[str]] = {}
-    for source in (title_index, abstract_index):
-        for token, ids in source.items():
-            title_or_abstract_index.setdefault(token, set()).update(ids)
-
-    exact_title_index: dict[str, list[str]] = {}
-    for patent_id, title in titles:
-        exact_title_index.setdefault(normalize_title(title), []).append(patent_id)
-
-    # Classification is matched by prefix, so every prefix of every code gets
-    # its own entry: a "B60B" lookup is then a dict hit, not a scan. The codes
-    # come from the data, so nothing here is specific to vehicle patents.
-    classification_prefix: dict[str, set[str]] = {}
-    for patent in patents:
-        code = patent.classification.upper()
-        for length in range(1, len(code) + 1):
-            classification_prefix.setdefault(code[:length], set()).add(patent.patent_id)
-
+    bundle = assemble_bundle(patents, units, args.model)
+    bundle["ingest_report"] = ingest_report
+    bundle["timings"] = timings
+    title_index, abstract_index = bundle["title_index"], bundle["abstract_index"]
     timings["filter_indexes_s"] = time.perf_counter() - start
     print(f"filter indexes built in {timings['filter_indexes_s']:.1f}s")
-
-    # --- unit layout ------------------------------------------------------
-    # Units are generated patent by patent, so each patent owns a contiguous
-    # block of rows. Storing the block bounds lets the search work on whole
-    # blocks instead of looking at units one by one.
-    unit_rows: dict[str, tuple[int, int]] = {}
-    for position, unit in enumerate(units):
-        if unit.patent_id not in unit_rows:
-            unit_rows[unit.patent_id] = (position, position + 1)
-        else:
-            first, _ = unit_rows[unit.patent_id]
-            unit_rows[unit.patent_id] = (first, position + 1)
-
-    # Claim objects are dropped from the stored patent record: the claim text
-    # already lives in the units, and keeping both would double the index.
-    patent_records = {}
-    for patent in patents:
-        record = asdict(patent)
-        for key in ("claims", "raw_paragraphs", "paragraphs", "paragraph_numbers"):
-            record.pop(key, None)
-        record["claim_count"] = len(patent.claims)
-        patent_records[patent.patent_id] = record
-
-    bundle = {
-        "model_name": args.model,
-        "patents": patent_records,
-        "units": [asdict(u) for u in units],
-        "unit_rows": unit_rows,
-        "title_index": title_index,
-        "abstract_index": abstract_index,
-        "title_or_abstract_index": title_or_abstract_index,
-        "title_phrases": build_phrase_index(titles),
-        "abstract_phrases": build_phrase_index(abstracts),
-        "exact_title_index": exact_title_index,
-        "classification_prefix": classification_prefix,
-        "ingest_report": ingest_report,
-        "timings": timings,
-    }
 
     np.save(os.path.join(args.out, "vectors.npy"), vectors)
     with open(os.path.join(args.out, "index.pkl"), "wb") as handle:
