@@ -191,6 +191,22 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Validation:** Unit tests on a hand-made index with known scores check the order, the margin, the cap, de-duplication, and that all filtering strategies give identical excerpts.
 - **Limitations:** The 0.10 margin is tuned on 12 queries for this model; another model's scores would need a new measurement.
 
+## D17. When filters leave nothing, suggest changes that would return patents
+- **Status:** Validated
+- **Problem:** The first version said which filter matched nothing and printed a general tip. A user with a typo, a near-miss title or an over-strict combination had to guess what to change.
+- **Chosen:** On an empty result, the engine offers concrete changes, each with the number of patents it would give and a command that runs it. Only changes that would return patents are offered, at most six, in this order:
+  1. **Spelling:** a keyword found nowhere in its field gets close words from that field's own vocabulary ("aerodinamic" → "aerodynamic", 7 patents).
+  2. **Near titles:** an exact title with no match gets the closest real titles ("pneumatic tyre" → "PNEUMATIC TIRE", 33).
+  3. **Nearby classification codes:** an unknown code gets the codes that exist under its closest existing prefix ("B60X" → B60C 318, B60B 298, B60D 20).
+  4. **Any word instead of all:** when each word matches some patents but none matches them all, with the count per word ("flat" 4, "tyre" 294, "warning" 1 → 296 patents).
+  5. **Search by meaning:** drop the filter and add its words to the query.
+  6. **Drop one filter:** with the count that remains. When every filter matches something but no patent passes them all, each filter is offered for dropping.
+- **Rationale:** Each suggestion is computed from the same indexes the filters use, so its count is exact, not a guess. Filters stay strict: nothing appears unless the user picks a suggestion.
+- **Alternatives:** Relax filters automatically (rejected: results that don't satisfy what the user typed, shown without saying so); fuzzy matching inside the filters (still deferred, see D15).
+- **Evidence:** Computing the suggestions takes 0.2 to 4.5 ms (median of 20 runs per case, 2-core sandbox), and only runs when a search returns nothing.
+- **Validation:** Seven unit tests on the hand-made index: spelling, any-word, unknown classification, near title, moving words into the query, filters that never overlap, and no suggestions when there are results.
+- **Limitations:** "Search by meaning" searches all of a patent's text, not just the field the filter named, because searching one field by meaning isn't built (D15). Spelling suggestions cover single words, not phrases. The near-title suggestion is a hint only; matching itself stays exact.
+
 ## Caveat on what this system can conclude
 
 The sample is 640 vehicle-related US patent applications published between February 2024 and

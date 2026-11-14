@@ -102,3 +102,53 @@ def test_filter_only_search_shows_an_abstract_preview(engine):
     report = engine.search(filters=Filters(classification="B60C"), top_k=5)
     (result,) = report.results
     assert result.excerpts == [] and result.excerpt_label == "Abstract"
+
+
+# -- suggestions when filters match nothing -----------------------------------
+def kinds(report):
+    return [(s.kind, s.patents) for s in report.suggestions]
+
+
+def test_misspelled_keyword_gets_a_spelling_suggestion(engine):
+    report = engine.search(filters=Filters(title_keywords="spokse"))
+    assert report.results == [] and report.empty_reason
+    first = report.suggestions[0]
+    assert first.kind == "spelling" and first.filters.title_keywords == "spokes"
+    assert first.patents == 1
+
+
+def test_words_that_match_separately_suggest_any_word(engine):
+    report = engine.search(filters=Filters(abstract_keywords="sensor hollow"))
+    any_word = [s for s in report.suggestions if s.kind == "match_any"]
+    assert any_word and any_word[0].filters.match_any and any_word[0].patents == 2
+    assert '"sensor" 1' in any_word[0].message and '"hollow" 1' in any_word[0].message
+
+
+def test_unknown_classification_suggests_codes_that_exist(engine):
+    report = engine.search(filters=Filters(classification="B60X"))
+    offered = {s.filters.classification for s in report.suggestions if s.kind == "classification"}
+    assert offered == {"B60B", "B60C"}
+
+
+def test_near_title_is_suggested(engine):
+    report = engine.search(filters=Filters(exact_title="pneumatic tyre"))
+    titles = [s.filters.exact_title for s in report.suggestions if s.kind == "similar_title"]
+    assert titles[0] == "PNEUMATIC TIRE"
+
+
+def test_filter_words_can_move_into_the_query(engine):
+    report = engine.search("wheel", filters=Filters(title_keywords="aerodynamic"))
+    by_meaning = [s for s in report.suggestions if s.kind == "search_by_meaning"]
+    assert by_meaning[0].query == "wheel aerodynamic"
+    assert by_meaning[0].filters.title_keywords == ""
+
+
+def test_filters_that_never_overlap_suggest_dropping_each(engine):
+    report = engine.search(filters=Filters(classification="B60C", title_keywords="wheel"))
+    assert report.empty_reason == ""            # each filter matches something
+    assert sorted(kinds(report)) == [("drop_filter", 1), ("drop_filter", 1)]
+
+
+def test_no_suggestions_when_there_are_results(engine):
+    report = engine.search(filters=Filters(classification="B60B"))
+    assert report.results and report.suggestions == []

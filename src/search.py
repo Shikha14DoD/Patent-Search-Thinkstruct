@@ -22,13 +22,15 @@ return the same results; only the work done differs.
 
 from __future__ import annotations
 
+import difflib
 import pickle
+import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
-from .text_utils import normalize_title, parse_keywords
+from .text_utils import TOKEN_RE, normalize_title, parse_keywords, stem
 
 STRATEGIES = ("prefilter", "mask", "postfilter", "auto")
 # A result shows up to this many matching pieces of its patent.
@@ -90,6 +92,18 @@ class Result:
 
 
 @dataclass
+class Suggestion:
+    """A way out of an empty result: what to change, and what it would give."""
+
+    kind: str          # spelling | similar_title | classification | match_any |
+                       # search_by_meaning | drop_filter
+    message: str
+    query: str         # the query to run instead
+    filters: Filters   # the filters to run instead
+    patents: int       # how many patents would pass the filters
+
+
+@dataclass
 class SearchReport:
     """Results plus the numbers the benchmark and the UI need."""
 
@@ -102,6 +116,7 @@ class SearchReport:
     strategy: str = ""
     timings_ms: dict[str, float] = field(default_factory=dict)
     empty_reason: str = ""
+    suggestions: list[Suggestion] = field(default_factory=list)
 
 
 class PatentSearch:
@@ -122,6 +137,17 @@ class PatentSearch:
         self.classification_prefix = bundle["classification_prefix"]
         self.model_name = bundle["model_name"]
         self._model = model
+
+        # Raw (unstemmed) words per field, for spelling suggestions. Built from
+        # the stored titles and abstracts, so every word is in the indexes.
+        def words(texts) -> set[str]:
+            return {w for text in texts for w in TOKEN_RE.findall(text.lower())
+                    if len(w) > 2 and not w.isdigit()}
+        self.title_vocabulary = words(p["title"] for p in self.patents.values())
+        self.abstract_vocabulary = words(p["abstract"] for p in self.patents.values())
+        self.titles_by_key = {}
+        for patent in self.patents.values():
+            self.titles_by_key.setdefault(normalize_title(patent["title"]), patent["title"])
 
         # Every patent owns one contiguous block of unit rows. Keeping the
         # block bounds as arrays lets ranking work on whole blocks at once.
@@ -169,6 +195,35 @@ class PatentSearch:
             matched = self._combine(matched, hits, match_any)
         return matched if matched is not None else set()
 
+    # Each keyword field: (Filters attribute, label, inverted index, phrase sources).
+    def _keyword_fields(self):
+        return [
+            ("title_keywords", "title", self.title_index, [self.title_phrases]),
+            ("abstract_keywords", "abstract", self.abstract_index, [self.abstract_phrases]),
+            ("title_or_abstract_keywords", "title/abstract", self.title_or_abstract_index,
+             [self.title_phrases, self.abstract_phrases]),
+        ]
+
+    def _filter_hits(self, filters: Filters) -> list[tuple[str, str, set[str]]]:
+        """(Filters attribute, display name, matching patents) per active filter."""
+        found: list[tuple[str, str, set[str]]] = []
+        if filters.classification:
+            codes = self._classification_codes(filters.classification)
+            hits: set[str] = set()
+            for code in codes:  # several codes are OR-ed together
+                hits |= self.classification_prefix.get(code, set())
+            found.append(("classification", f"classification {'/'.join(codes)}", hits))
+        if filters.exact_title:
+            key = normalize_title(filters.exact_title)
+            found.append(("exact_title", f'title is "{filters.exact_title}"',
+                          set(self.exact_title_index.get(key, ()))))
+        for attribute, label, inverted, phrases in self._keyword_fields():
+            raw = getattr(filters, attribute)
+            if raw:
+                found.append((attribute, f'{label} "{raw}"', self._keyword_match(
+                    parse_keywords(raw), inverted, phrases, filters.match_any)))
+        return found
+
     def resolve_filters(self, filters: Filters) -> tuple[set[str] | None, dict[str, int], str]:
         """Return (allowed patent ids, per-filter counts, name of an empty filter).
 
@@ -178,45 +233,117 @@ class PatentSearch:
         counts: dict[str, int] = {}
         allowed: set[str] | None = None
         empty_reason = ""
-
-        def apply(name: str, hits: set[str]) -> None:
-            nonlocal allowed, empty_reason
+        for _, name, hits in self._filter_hits(filters):
             counts[name] = len(hits)
             if not hits and not empty_reason:
                 empty_reason = name
             allowed = hits if allowed is None else allowed & hits
-
-        if filters.classification:
-            codes = self._classification_codes(filters.classification)
-            hits: set[str] = set()
-            for code in codes:  # several codes are OR-ed together
-                hits |= self.classification_prefix.get(code, set())
-            apply(f"classification {'/'.join(codes)}", hits)
-
-        if filters.exact_title:
-            key = normalize_title(filters.exact_title)
-            apply(f'title is "{filters.exact_title}"',
-                  set(self.exact_title_index.get(key, ())))
-
-        if filters.title_keywords:
-            apply(f'title "{filters.title_keywords}"', self._keyword_match(
-                parse_keywords(filters.title_keywords), self.title_index,
-                [self.title_phrases], filters.match_any))
-
-        if filters.abstract_keywords:
-            apply(f'abstract "{filters.abstract_keywords}"', self._keyword_match(
-                parse_keywords(filters.abstract_keywords), self.abstract_index,
-                [self.abstract_phrases], filters.match_any))
-
-        if filters.title_or_abstract_keywords:
-            apply(f'title/abstract "{filters.title_or_abstract_keywords}"', self._keyword_match(
-                parse_keywords(filters.title_or_abstract_keywords),
-                self.title_or_abstract_index,
-                [self.title_phrases, self.abstract_phrases], filters.match_any))
-
         if allowed is not None:
             counts["combined"] = len(allowed)
         return allowed, counts, empty_reason
+
+    # -- suggestions when the filters leave nothing -----------------------
+    def _count(self, filters: Filters) -> int:
+        allowed, _, _ = self.resolve_filters(filters)
+        return len(self.patents) if allowed is None else len(allowed)
+
+    def suggest(self, query: str, filters: Filters, limit: int = 6) -> list[Suggestion]:
+        """Ways out of an empty result, each with the patents it would give.
+
+        Only changes that would actually return patents are suggested. In
+        order: likely typos, near titles, nearby classification codes,
+        "any word" instead of "all words", searching the words by meaning,
+        and dropping one filter.
+        """
+        found = self._filter_hits(filters)
+        suggestions: list[Suggestion] = []
+
+        def offer(kind: str, message: str, new_filters: Filters, new_query: str = query) -> None:
+            count = self._count(new_filters)
+            if count and not any(s.filters == new_filters and s.query == new_query
+                                 for s in suggestions):
+                suggestions.append(Suggestion(kind, message.replace("{count}", str(count)),
+                                              new_query, new_filters, count))
+
+        # 1. Spelling: a keyword that appears nowhere in its field.
+        for attribute, label, inverted, _ in self._keyword_fields():
+            raw = getattr(filters, attribute)
+            vocabulary = (self.title_vocabulary if label == "title" else
+                          self.abstract_vocabulary if label == "abstract" else
+                          self.title_vocabulary | self.abstract_vocabulary)
+            for display, tokens in parse_keywords(raw):
+                if len(tokens) != 1 or inverted.get(tokens[0]):
+                    continue
+                for candidate in difflib.get_close_matches(display.lower(), vocabulary,
+                                                           n=3, cutoff=0.8):
+                    if stem(candidate) == tokens[0]:
+                        continue
+                    fixed = re.sub(rf"(?<![\w\"]){re.escape(display)}(?![\w\"])",
+                                   candidate, raw, count=1)
+                    offer("spelling", f'Did you mean "{candidate}" in the {label}? '
+                          "→ {count} patents", replace(filters, **{attribute: fixed}))
+
+        for attribute, name, hits in found:
+            if hits:
+                continue
+            # 2. A title that is close to the one typed.
+            if attribute == "exact_title":
+                for key in difflib.get_close_matches(normalize_title(filters.exact_title),
+                                                     self.titles_by_key, n=3, cutoff=0.75):
+                    title = self.titles_by_key[key]
+                    offer("similar_title", f'Did you mean the title "{title}"? → {{count}} patents',
+                          replace(filters, exact_title=title))
+            # 3. Classification codes that do exist next to the one typed.
+            if attribute == "classification":
+                for code in self._classification_codes(filters.classification):
+                    parent = code
+                    while parent and parent not in self.classification_prefix:
+                        parent = parent[:-1]
+                    if not parent:
+                        continue
+                    children = {}
+                    for prefix, ids in self.classification_prefix.items():
+                        if len(prefix) == min(len(code), len(parent) + 1) and \
+                                prefix.startswith(parent) and prefix != code:
+                            children[prefix] = len(ids)
+                    for child in sorted(children, key=lambda c: -children[c])[:3]:
+                        offer("classification", f"Classification {child} exists → "
+                              "{count} patents", replace(filters, classification=child))
+
+        # 4. "Any word" instead of "all words", when only some words match.
+        if not filters.match_any:
+            for attribute, label, inverted, phrases in self._keyword_fields():
+                terms = parse_keywords(getattr(filters, attribute))
+                if len(terms) < 2:
+                    continue
+                per_term = [(display, len(self._keyword_match([(display, tokens)], inverted,
+                                                             phrases, False)))
+                            for display, tokens in terms]
+                # Each word may match some patents while no patent has them all.
+                all_words = self._keyword_match(terms, inverted, phrases, False)
+                if not all_words and any(n for _, n in per_term):
+                    detail = ", ".join(f'"{d}" {n}' for d, n in per_term)
+                    offer("match_any", f"In the {label}, {detail}: match any word instead "
+                          "→ {count} patents", replace(filters, match_any=True))
+                    break
+
+        # 5 and 6. Per empty filter: search its words by meaning, or drop it.
+        # When every filter matches something but no patent passes them all,
+        # each filter is a candidate to drop.
+        none_empty = all(hits for _, _, hits in found)
+        for attribute, name, hits in found:
+            if hits and not none_empty:
+                continue
+            without = replace(filters, **{attribute: ""})
+            if attribute != "classification" and not hits:
+                words = getattr(filters, attribute).replace('"', "")
+                new_query = f"{query} {words}".strip()
+                offer("search_by_meaning", f'Search "{words}" by meaning instead of requiring '
+                      "the exact words (ranks all text of {count} patents)",
+                      without, new_query)
+            offer("drop_filter", f"Remove the {name} filter → {{count}} patents", without)
+
+        return suggestions[:limit]
 
     @staticmethod
     def _classification_codes(raw: str) -> list[str]:
@@ -343,6 +470,9 @@ class PatentSearch:
             timings["filter_ms"] = (time.perf_counter() - start) * 1000
             if allowed is not None and not allowed:
                 report.empty_reason = empty_reason
+                start = time.perf_counter()
+                report.suggestions = self.suggest(query, filters)
+                timings["suggest_ms"] = (time.perf_counter() - start) * 1000
                 timings["total_ms"] = (time.perf_counter() - total_start) * 1000
                 return report
         report.candidate_patents = len(allowed) if allowed is not None else len(self.patents)

@@ -16,6 +16,30 @@ import time
 from .search import EXCERPT_MARGIN, MAX_EXCERPTS, STRATEGIES, Filters, PatentSearch
 
 
+def _quote(value: str) -> str:
+    """Quote a value for the shell; single quotes when it holds a phrase in quotes."""
+    return f"'{value}'" if '"' in value else f'"{value}"'
+
+
+def as_command(query: str, filters: Filters, args) -> str:
+    """The CLI command that runs a suggestion (works in PowerShell and bash)."""
+    parts = ["python -m src.cli"]
+    if query:
+        parts.append(_quote(query))
+    for flag, value in (("--classification", filters.classification),
+                        ("--exact-title", filters.exact_title),
+                        ("--title-keywords", filters.title_keywords),
+                        ("--abstract-keywords", filters.abstract_keywords),
+                        ("--title-or-abstract-keywords", filters.title_or_abstract_keywords)):
+        if value:
+            parts.append(f"{flag} {_quote(value)}")
+    if filters.match_any:
+        parts.append("--match-any")
+    if args.top != 10:
+        parts.append(f"--top {args.top}")
+    return " ".join(parts)
+
+
 def shorten(text: str, full: bool, width: int) -> str:
     return text if full else textwrap.shorten(text, width=width, placeholder=" …")
 
@@ -72,9 +96,13 @@ def main() -> None:
     if not report.results:
         if report.empty_reason:
             print(f"No results: the {report.empty_reason} filter matched nothing.")
-            print("Try removing that filter, or put those words in the query instead.")
         else:
-            print("No results.")
+            print("No results: each filter matches some patents, but none matches them all.")
+        if report.suggestions:
+            print("\nTry instead:")
+            for number, suggestion in enumerate(report.suggestions, start=1):
+                print(f"  {number}. {suggestion.message}")
+                print(f"     {as_command(suggestion.query, suggestion.filters, args)}")
         return
 
     if not args.query:
