@@ -28,7 +28,7 @@ from dataclasses import asdict
 
 import numpy as np
 
-from .load_data import load_corpus
+from .load_data import MAX_MODEL_TOKENS, load_corpus
 from .text_utils import normalize_title, tokenize
 
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -188,8 +188,13 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     timings: dict[str, float] = {}
 
+    # Only the tokenizer is needed to split texts to the model's input limit;
+    # it loads in about a second, unlike the model itself.
+    from transformers import AutoTokenizer
+
     start = time.perf_counter()
-    patents, units, ingest_report = load_corpus(args.data)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    patents, units, ingest_report = load_corpus(args.data, tokenizer)
     timings["load_and_clean_s"] = time.perf_counter() - start
     print(f"loaded {len(patents)} patents -> {len(units)} units "
           f"in {timings['load_and_clean_s']:.1f}s")
@@ -280,6 +285,11 @@ def main() -> None:
         pickle.dump(bundle, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     index_bytes = os.path.getsize(os.path.join(args.out, "index.pkl"))
+    # Check, with the real tokenizer, that nothing embedded was cut off.
+    over_limit = sum(
+        1 for unit in units
+        if len(tokenizer(unit.text, add_special_tokens=True)["input_ids"]) > MAX_MODEL_TOKENS)
+    print(f"units longer than the model's {MAX_MODEL_TOKENS}-token limit: {over_limit}")
     stats = {
         "patents": len(patents),
         "units": len(units),
@@ -290,6 +300,7 @@ def main() -> None:
         "patents_without_description": sum(1 for p in patents if not p.paragraphs),
         "ingest_report": ingest_report,
         "embedding": embed_stats,
+        "units_over_token_limit": over_limit,
         "vector_mb": round(vectors.nbytes / 1e6, 1),
         "metadata_mb": round(index_bytes / 1e6, 1),
         "distinct_title_words": len(title_index),

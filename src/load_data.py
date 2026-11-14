@@ -36,6 +36,17 @@ sample (see DECISIONS.md):
       "B/A=1.00.", stray fragments such as "vehicle wheel."). A short query
       matches a short fragment almost perfectly, so a fragment with no
       technical content was outranking real evidence.
+
+  D7  Every embedded text fits the model's input limit. all-MiniLM-L6-v2
+      reads 256 tokens and silently drops the rest. Measured with the real
+      tokenizer, the first build lost text in 13.5% of claims, 1.7% of
+      description chunks and 2.7% of abstracts, and 17% of dependent
+      claims (1,165) lost part of their *own* text because the parent
+      claim was placed in front of it. Now:
+        - texts are split by token count, not word count;
+        - a claim's own text always fits; the parent claim (or title) is
+          trimmed to the space left, and dropped if too little is left;
+        - long claims and abstracts are split into parts like paragraphs.
 """
 
 from __future__ import annotations
@@ -46,9 +57,14 @@ import os
 import re
 from dataclasses import dataclass, field
 
-# Roughly the number of words that fits the model's 256-token limit.
-CHUNK_WORDS = 180
-CHUNK_OVERLAP_WORDS = 30
+# The embedding model reads at most this many tokens per text (D7).
+MAX_MODEL_TOKENS = 256
+# Room left for content: minus [CLS] and [SEP], minus a small margin.
+TOKEN_BUDGET = MAX_MODEL_TOKENS - 6
+# Consecutive parts of a split text share this many tokens.
+CHUNK_OVERLAP_TOKENS = 32
+# Parent-claim context shorter than this is not worth adding.
+MIN_CONTEXT_TOKENS = 16
 # Paragraphs shorter than this carry no usable evidence (see D6).
 MIN_PARAGRAPH_WORDS = 5
 
@@ -204,19 +220,72 @@ def parse_claims(raw_claims: list[str]) -> list[Claim]:
     return claims
 
 
-def chunk_paragraph(text: str) -> list[str]:
-    """Split a long paragraph into overlapping word chunks."""
+class TokenCounter:
+    """Counts tokens the way the embedding model will.
+
+    With a tokenizer, counts are exact. BERT-style tokenizers split on
+    whitespace before splitting words into pieces, so a text's token count
+    is the sum of its words' counts, and each distinct word is tokenized
+    only once. Without a tokenizer (tests, quick inspection) a conservative
+    estimate of one token per four characters is used.
+    """
+
+    def __init__(self, tokenizer=None):
+        self.tokenizer = tokenizer
+        self._cache: dict[str, int] = {}
+
+    def word(self, word: str) -> int:
+        count = self._cache.get(word)
+        if count is None:
+            if self.tokenizer is not None:
+                count = len(self.tokenizer.tokenize(word))
+            else:
+                count = -(-len(word) // 4)  # ceil(len / 4)
+            self._cache[word] = max(count, 1)
+            count = self._cache[word]
+        return count
+
+    def count(self, text: str) -> int:
+        return sum(self.word(word) for word in text.split())
+
+
+def chunk_text(text: str, counter: TokenCounter, budget: int = TOKEN_BUDGET,
+               overlap: int = CHUNK_OVERLAP_TOKENS) -> list[str]:
+    """Split text into parts of at most `budget` tokens, overlapping slightly."""
     words = text.split()
-    if len(words) <= CHUNK_WORDS:
+    costs = [counter.word(word) for word in words]
+    if sum(costs) <= budget:
         return [text]
     chunks: list[str] = []
-    step = CHUNK_WORDS - CHUNK_OVERLAP_WORDS
-    for start in range(0, len(words), step):
-        chunk = words[start:start + CHUNK_WORDS]
-        if len(chunk) < 20 and chunks:  # don't emit a tiny trailing fragment
+    start = 0
+    while start < len(words):
+        total, end = 0, start
+        while end < len(words) and total + costs[end] <= budget:
+            total += costs[end]
+            end += 1
+        end = max(end, start + 1)  # a single over-long "word" still moves on
+        chunks.append(" ".join(words[start:end]))
+        if end >= len(words):
             break
-        chunks.append(" ".join(chunk))
+        # Step back so the next part repeats the last few tokens.
+        back, next_start = 0, end
+        while next_start > start + 1 and back + costs[next_start - 1] <= overlap:
+            back += costs[next_start - 1]
+            next_start -= 1
+        start = next_start
     return chunks
+
+
+def trim_to_tokens(text: str, counter: TokenCounter, budget: int) -> str:
+    """Keep the beginning of text, up to `budget` tokens."""
+    kept, total = [], 0
+    for word in text.split():
+        cost = counter.word(word)
+        if total + cost > budget:
+            break
+        kept.append(word)
+        total += cost
+    return " ".join(kept)
 
 
 def load_patents(data_dir: str) -> tuple[list[Patent], dict[str, int]]:
@@ -283,33 +352,47 @@ def load_patents(data_dir: str) -> tuple[list[Patent], dict[str, int]]:
     return patents, report
 
 
-def build_units(patents: list[Patent]) -> list[Unit]:
+def _part_label(label: str, part: int, parts: int) -> str:
+    return f"{label} (part {part + 1})" if parts > 1 else label
+
+
+def build_units(patents: list[Patent], counter: TokenCounter | None = None
+                ) -> tuple[list[Unit], dict[str, int]]:
     """Turn patents into the flat list of searchable units."""
+    counter = counter or TokenCounter()
     units: list[Unit] = []
-    next_id = 0
+    stats = {"texts_split_to_fit": 0, "parent_context_trimmed": 0,
+             "parent_context_dropped": 0}
+
+    def add(patent_id, kind, position, label, note, context_label,
+            text, display, raw) -> None:
+        units.append(Unit(len(units), patent_id, kind, position, label, note,
+                          context_label, text, display, raw))
 
     for patent in patents:
+        # -- abstract: the title rides along as context ---------------------
         if patent.abstract:
-            # The title is short but informative, so it rides along with the
-            # abstract for embedding rather than getting a vector of its own.
-            text = f"{patent.title}. {patent.abstract}" if patent.title else patent.abstract
-            units.append(Unit(next_id, patent.patent_id, "abstract", 0, "Abstract", "", "",
-                              text, patent.abstract, patent.abstract))
-            next_id += 1
+            title = patent.title if patent.title else ""
+            title_cost = counter.count(title) + 1 if title else 0
+            parts = chunk_text(patent.abstract, counter, TOKEN_BUDGET - title_cost)
+            stats["texts_split_to_fit"] += len(parts) > 1
+            for number, part in enumerate(parts):
+                add(patent.patent_id, "abstract", 0,
+                    _part_label("Abstract", number, len(parts)), "", "",
+                    f"{title}. {part}" if title else part, part,
+                    patent.abstract if number == 0 else "")
 
+        # -- claims: own text always fits, context fills the space left ------
         by_number = {claim.number: claim.text for claim in patent.claims}
         for claim in patent.claims:
             # A dependent claim is a fragment on its own, and a claim whose
             # preamble was lost starts mid-sentence. Both get context for the
             # embedding only; the user still sees the claim as published.
-            context: list[str] = []
-            context_label = ""
+            context, context_label = "", ""
             if claim.parent and claim.parent in by_number:
-                context.append(by_number[claim.parent])
-                context_label = f"Claim {claim.parent}"
+                context, context_label = by_number[claim.parent], f"Claim {claim.parent}"
             elif claim.preamble_missing and patent.title:
-                context.append(patent.title)
-            embed_text = " ".join(context + [claim.text]) if context else claim.text
+                context = patent.title
 
             notes = []
             if claim.number_inferred:
@@ -317,28 +400,44 @@ def build_units(patents: list[Patent]) -> list[Unit]:
             if claim.preamble_missing:
                 notes.append("opening text missing in source")
 
-            units.append(Unit(next_id, patent.patent_id, "claim", claim.number,
-                              f"Claim {claim.number}", "; ".join(notes), context_label,
-                              embed_text, claim.text, claim.raw_text))
-            next_id += 1
+            parts = chunk_text(claim.text, counter)
+            stats["texts_split_to_fit"] += len(parts) > 1
+            for number, part in enumerate(parts):
+                embed_text, used_label = part, ""
+                if context:
+                    room = TOKEN_BUDGET - counter.count(part) - 1
+                    if room >= MIN_CONTEXT_TOKENS:
+                        trimmed = trim_to_tokens(context, counter, room)
+                        if context_label and trimmed != context:
+                            stats["parent_context_trimmed"] += 1
+                        embed_text, used_label = f"{trimmed} {part}", context_label
+                    elif context_label:
+                        stats["parent_context_dropped"] += 1
+                add(patent.patent_id, "claim", claim.number,
+                    _part_label(f"Claim {claim.number}", number, len(parts)),
+                    "; ".join(notes), used_label, embed_text, part,
+                    claim.raw_text if number == 0 else "")
 
+        # -- description paragraphs ------------------------------------------
         for index, cleaned, raw in zip(
                 patent.paragraph_numbers, patent.paragraphs, patent.raw_paragraphs):
-            for chunk_number, chunk in enumerate(chunk_paragraph(cleaned)):
-                label = f"Description para {index}"
-                if chunk_number:
-                    label += f" (part {chunk_number + 1})"
-                units.append(Unit(next_id, patent.patent_id, "paragraph", index,
-                                  label, "", "", chunk, chunk,
-                                  raw if chunk_number == 0 else ""))
-                next_id += 1
+            parts = chunk_text(cleaned, counter)
+            stats["texts_split_to_fit"] += len(parts) > 1
+            for number, part in enumerate(parts):
+                add(patent.patent_id, "paragraph", index,
+                    _part_label(f"Description para {index}", number, len(parts)),
+                    "", "", part, part, raw if number == 0 else "")
 
-    return units
+    return units, stats
 
 
-def load_corpus(data_dir: str) -> tuple[list[Patent], list[Unit], dict[str, int]]:
+def load_corpus(data_dir: str, tokenizer=None
+                ) -> tuple[list[Patent], list[Unit], dict[str, int]]:
+    """Load, clean and split. Pass the model's tokenizer for exact token counts."""
     patents, report = load_patents(data_dir)
-    return patents, build_units(patents), report
+    units, unit_stats = build_units(patents, TokenCounter(tokenizer))
+    report.update(unit_stats)
+    return patents, units, report
 
 
 if __name__ == "__main__":

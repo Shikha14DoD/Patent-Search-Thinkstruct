@@ -9,7 +9,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.load_data import (  # noqa: E402
-    chunk_paragraph,
+    TOKEN_BUDGET,
+    Patent,
+    TokenCounter,
+    build_units,
+    chunk_text,
     google_patents_url,
     parse_claims,
     publication_date_from_filename,
@@ -80,12 +84,45 @@ def test_publication_date_and_url():
     assert google_patents_url("", "20240051333").endswith("/US20240051333A1")
 
 
-def test_long_paragraphs_are_chunked_with_overlap():
-    words = [f"w{i}" for i in range(400)]
-    chunks = chunk_paragraph(" ".join(words))
-    assert len(chunks) == 3
-    assert chunks[0].split()[-30:] == chunks[1].split()[:30]  # overlap
-    assert chunk_paragraph("a short paragraph") == ["a short paragraph"]
+# -- fitting the model's input limit (D7) ------------------------------------
+# Without a tokenizer, TokenCounter estimates one token per four characters,
+# so "word" costs 1 token: these tests control token counts exactly.
+def test_long_text_is_split_with_overlap():
+    counter = TokenCounter()
+    text = " ".join(["word"] * 600)
+    parts = chunk_text(text, counter, budget=250, overlap=32)
+    assert all(counter.count(part) <= 250 for part in parts)
+    assert len(parts) == 3
+    assert parts[0].split()[-32:] == parts[1].split()[:32]  # overlap
+    assert chunk_text("a short paragraph", counter) == ["a short paragraph"]
+
+
+def _patent_with_claims(claims):
+    from src.load_data import parse_claims
+    return Patent(patent_id="1", title="WHEEL", abstract="A wheel.", classification="B60B",
+                  publication_date="2024-01-01", url="u", claims=parse_claims(claims))
+
+
+def test_dependent_claim_keeps_its_own_text_when_the_parent_is_long():
+    parent = "1 . A wheel comprising " + "word " * 300
+    child_own = "The wheel of claim 1 , wherein the spoke is hollow and made of steel."
+    patent = _patent_with_claims([parent, "2 . " + child_own])
+    units, stats = build_units([patent], TokenCounter())
+    child = [u for u in units if u.label == "Claim 2"][0]
+    counter = TokenCounter()
+    assert child.text.endswith(child_own)              # own text intact, at the end
+    assert counter.count(child.text) <= TOKEN_BUDGET   # whole text fits
+    assert child.context_label == "Claim 1"
+    assert stats["parent_context_trimmed"] == 1
+
+
+def test_every_unit_fits_the_budget():
+    long_claim = "1 . A wheel comprising " + "word " * 700
+    patent = _patent_with_claims([long_claim, "2 . The wheel of claim 1 , wherein it is red."])
+    units, stats = build_units([patent], TokenCounter())
+    assert all(TokenCounter().count(u.text) <= TOKEN_BUDGET for u in units)
+    assert [u.label for u in units if u.position == 1][:2] == ["Claim 1 (part 1)",
+                                                               "Claim 1 (part 2)"]
 
 
 # -- text normalisation -----------------------------------------------------
