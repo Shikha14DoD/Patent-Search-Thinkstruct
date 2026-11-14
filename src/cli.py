@@ -31,7 +31,8 @@ def main() -> None:
     parser.add_argument("--exact-title", default="")
     parser.add_argument("--match-any", action="store_true",
                         help="Match any keyword instead of all of them")
-    parser.add_argument("--strategy", choices=STRATEGIES, default="prefilter")
+    parser.add_argument("--strategy", choices=STRATEGIES, default="auto",
+                        help="How filters are applied; auto picks by selectivity")
     parser.add_argument("--full", action="store_true", help="Print whole excerpts")
     args = parser.parse_args()
 

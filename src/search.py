@@ -32,8 +32,12 @@ from .text_utils import normalize_title, parse_keywords
 
 STRATEGIES = ("prefilter", "mask", "postfilter", "auto")
 # "auto" copies out the surviving units only when they are at most this
-# share of the index. Provisional: to be set from benchmarks/results.md.
-AUTO_PREFILTER_MAX_SHARE = 0.25
+# share of the index. Set from benchmarks/results.md: on an 8-core laptop
+# prefilter beat mask at 5-6% of units and lost from about 9% upwards; on a
+# 2-core machine it kept winning up to about 20%. 8% is safe on both. The
+# crossover depends on hardware, so this is a tuned value, not a constant
+# of the method (see DECISIONS.md).
+AUTO_PREFILTER_MAX_SHARE = 0.08
 
 
 @dataclass
@@ -294,7 +298,7 @@ class PatentSearch:
 
     # -- search -----------------------------------------------------------
     def search(self, query: str = "", filters: Filters | None = None, top_k: int = 10,
-               strategy: str = "prefilter",
+               strategy: str = "auto",
                query_vector: np.ndarray | None = None) -> SearchReport:
         """Run one search.
 
