@@ -235,12 +235,18 @@ class PatentSearch:
     # -- ranking ----------------------------------------------------------
     @staticmethod
     def _top_k(best: np.ndarray, top_k: int) -> np.ndarray:
-        """Positions of the top_k highest values, best first, ties by position."""
+        """Positions of the top_k highest values, best first, ties by position.
+
+        Ties are real in this data: identical passages appear in several
+        patents and get identical scores. argpartition alone would pick an
+        arbitrary subset of the tied patents at the cut-off, so everything
+        tied with the k-th score is kept and the tie is broken by position.
+        """
         usable = np.flatnonzero(np.isfinite(best))
         if usable.size > top_k:
-            keep = np.argpartition(-best[usable], top_k - 1)[:top_k]
-            usable = usable[keep]
-        return usable[np.lexsort((usable, -best[usable]))]
+            kth = np.partition(best[usable], usable.size - top_k)[usable.size - top_k]
+            usable = usable[best[usable] >= kth]
+        return usable[np.lexsort((usable, -best[usable]))][:top_k]
 
     def _rank_all_rows(self, scores: np.ndarray, allowed_mask: np.ndarray | None,
                        top_k: int) -> list[tuple[str, float, int]]:
