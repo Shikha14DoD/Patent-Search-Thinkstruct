@@ -210,6 +210,50 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Validation:** Seven unit tests on the hand-made index: spelling, any-word, unknown classification, near title, moving words into the query, filters that never overlap, and no suggestions when there are results.
 - **Limitations:** "Search by meaning" searches all of a patent's text, not just the field the filter named, because searching one field by meaning isn't built (D15). Spelling suggestions cover single words, not phrases. The near-title suggestion is a hint only; matching itself stays exact.
 
+## Later experiments (not yet run)
+
+Ideas for reducing each measured cost, ordered by the cost they target. None has been tried, so
+there are no predicted numbers: each would be measured with `benchmarks/timing.py` (and
+`embedding_run.json` for indexing). Anything that changes the vectors also changes the results,
+so it can only be adopted together with a relevance measurement; until then, it can be judged
+on speed and on how much the top-10 results change.
+
+**Query embedding (median 8.1 ms, the largest per-search cost) and model load (12.8 s)**
+
+| Experiment | Why it might help | Measure | Risk |
+|---|---|---|---|
+| Run the same model through ONNX Runtime or OpenVINO (`SentenceTransformer(..., backend="onnx")`) | Leaner CPU inference than PyTorch for one short text | Embedding median and p95; model load time | Vectors differ slightly: re-embed the corpus with the same backend |
+| Int8-quantized version of the model (ONNX dynamic quantization) | Smaller weights, faster arithmetic on CPU | Embedding time; overlap of top-10 results with the current model | Some loss of quality |
+| A static embedding model (for example `static-retrieval-mrl-en-v1`, or a Model2Vec distillation) | No transformer at query time: a lookup and an average | Embedding time; top-10 overlap | Clearly weaker on paraphrases; needs the relevance evaluation |
+| Cache embeddings of repeated queries | A repeated query skips the model entirely | Hit rate on a realistic query log | Only helps repeated queries |
+| Keep the model loaded in a long-running process (a Streamlit app or a small API) | The CLI pays the 12.8 s load on every call | Time from request to first result | None for results; it is an architecture change |
+| Tune PyTorch's thread count for single queries | Thread start-up can dominate a tiny batch | Embedding median and p95 | Machine-dependent |
+
+**Index build (20 to 29 pieces per second on the laptop)**
+
+| Experiment | Why it might help | Measure | Risk |
+|---|---|---|---|
+| ONNX, OpenVINO or int8 backends for bulk encoding | Same reasons as above, over 32,000 texts | Pieces per second | Same as above |
+| Larger batches, or several worker processes (`start_multi_process_pool`) | Better use of the 8 cores | Pieces per second | Memory use |
+| A GPU | Embedding is parallel arithmetic | Pieces per second | Not available on the laptop; matters at scale (Part 2) |
+
+**Search after embedding (median 2.48 ms: scoring 1.87, ranking 0.17, fetching evidence 0.46)**
+
+| Experiment | Why it might help | Measure | Risk |
+|---|---|---|---|
+| Reuse the scores from the main pass when fetching evidence, instead of scoring each top patent's pieces again | The mask and no-filter paths already hold every score; this is the 0.4 to 0.7 ms added by D16 | Evidence time, which should fall back towards 0.05 ms on those paths | None for results: same scores |
+| FAISS exact index (`IndexFlatIP`) instead of NumPy | Tuned kernels for the same exact search | Scoring time; results must be identical | Small gain expected at 35,000 vectors |
+| Compressed vectors: FAISS scalar quantization (8-bit), or binary embeddings with rescoring of the top candidates | Less memory to read per query: a quarter, or a thirty-second | Scoring time; top-10 overlap | Some loss of accuracy; mainly a large-scale win |
+| Fewer dimensions with a model trained for it (Matryoshka embeddings) | 128 instead of 384 numbers per vector | Scoring time; top-10 overlap | MiniLM isn't trained for truncation; needs a different model |
+| Approximate search (HNSW) | Avoids scoring every vector | Scoring time; recall against exact search | Not worth it at this size; essential at 10 million patents |
+| Calibrate the prefilter/mask threshold automatically at start-up | The 8% crossover moved between machines | Whether `auto` picks the faster method on a new machine | A short start-up cost |
+
+**Filter lookups (0.005 to 0.15 ms)**
+
+Already about 6% of a search or less, so not worth optimizing at this size. At 10 million
+patents, Python sets would be replaced by compressed bitmaps (for example Roaring bitmaps) or
+by the database's own indexes, where intersections are much cheaper (Part 2).
+
 ## Caveat on what this system can conclude
 
 The sample is 640 vehicle-related US patent applications published between February 2024 and
