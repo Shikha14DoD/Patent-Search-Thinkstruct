@@ -81,7 +81,9 @@ def main() -> None:
         excerpt = result.excerpt_text if args.full else textwrap.shorten(
             result.excerpt_text, width=240, placeholder=" …")
         note = f" ({result.excerpt_note})" if result.excerpt_note else ""
-        print(f"    Matched {result.excerpt_label}{note}: {excerpt}")
+        # Without a query nothing was matched: the abstract is shown as a preview.
+        prefix = "Matched " if args.query else ""
+        print(f"    {prefix}{result.excerpt_label}{note}: {excerpt}")
         print()
 
     if args.query:
