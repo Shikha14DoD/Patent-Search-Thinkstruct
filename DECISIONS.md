@@ -102,10 +102,10 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 ### D9. all-MiniLM-L6-v2 with exact search in NumPy
 - **Status:** Provisional (model); Validated (exact search at this scale)
 - **Problem:** Choose an embedding model and a vector search method.
-- **Evidence:** Exact search over all 34,551 vectors takes a median of 2.26 ms; embedding a query takes a median of 11.4 ms. The vectors take 53 MB. Building the embeddings ran at 20 to 29 texts per second on the laptop's CPU, about 20 minutes for the full sample.
+- **Evidence:** A full unfiltered search takes a median of 2.48 ms once the query is embedded, of which scoring all 34,551 vectors is 1.87 ms; embedding the query takes a median of 8.1 ms. The vectors take 53 MB. Building the embeddings ran at 20 to 29 texts per second on the laptop's CPU, about 20 minutes for the full sample.
 - **Alternatives:** BGE-small (same size, often stronger on retrieval benchmarks); patent-specific models; FAISS or another approximate index.
 - **Chosen:** all-MiniLM-L6-v2: small, fast on CPU, widely used, and quick for a reviewer to reproduce. Exact search with one matrix multiplication.
-- **Rationale:** At 2.26 ms, an approximate index would add infrastructure and a recall loss to save almost nothing, since query embedding dominates the request.
+- **Rationale:** At about 2.5 ms, an approximate index would add infrastructure and a recall loss to save almost nothing, since query embedding dominates the request.
 - **Trade-offs:** The model isn't tuned for patent language. Exact search grows linearly; around a million vectors it would reach tens of milliseconds.
 - **Not done, and why:** Comparing models requires a relevance metric. Without an evaluation set, a model swap would be guesswork, so the comparison is deferred together with evaluation.
 
@@ -125,7 +125,7 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
   - Keywords: separate inverted indexes for title, abstract, and title-or-abstract. Matching is word-level with stemming (sensor/sensors, braking/brake) and tyre/tire variants; quotes match an exact phrase; all words by default, "any word" optional.
   - Exact title: case and punctuation normalised.
   - All filters are AND-ed. An empty result names the filter that matched nothing.
-- **Evidence:** Resolving filters takes 0.004 to 0.12 ms in every benchmark scenario.
+- **Evidence:** Resolving filters takes 0.005 to 0.15 ms in every benchmark scenario.
 - **Alternatives:** A semantic fallback for filters (return "related" patents when no exact match exists). Rejected: a filter is a yes/no decision, and similarity has no natural cut-off, so any threshold would be arbitrary and the results hard to explain. Meaning-based search belongs in the ranked query.
 - **Limitations:** Keyword filters don't match synonyms ("car" vs "vehicle"). Classification codes are stored without separators (`B60B2700FI`), so prefixes deeper than the subclass can be ambiguous. Generic titles are common: 33 patents are titled exactly "PNEUMATIC TIRE".
 
@@ -137,18 +137,19 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 
   | Surviving units | Prefilter | Mask | Postfilter (naive) |
   |---|---:|---:|---:|
-  | 100% (no filter) | – | 2.26 | – |
-  | 44.2% (B60B) | 8.92 | 2.22 | 5.44 |
-  | 19.1% (B60C11) | 3.99 | 2.10 | 5.35 |
-  | 9.5% (abstract: tread groove) | 2.22 | 2.09 | 12.07 |
-  | 6.4% (exact title) | 1.61 | 2.08 | 6.49 |
-  | 5.2% (title/abstract: sensor) | 1.49 | 2.32 | 18.17 |
+  | 100% (no filter) | – | 2.48 | – |
+  | 44.2% (B60B) | 9.14 | 2.53 | 5.99 |
+  | 19.1% (B60C11) | 4.32 | 2.42 | 5.88 |
+  | 9.5% (abstract: tread groove) | 2.83 | 2.59 | 13.88 |
+  | 6.4% (exact title) | 2.88 | 3.07 | 10.32 |
+  | 5.2% (title/abstract: sensor) | 2.10 | 2.71 | 21.22 |
 
-  The naive method is 2 to 8 times slower than no filter. Mask costs the same as no filter in every case. Prefilter wins only when a small share survives: copying out thousands of scattered vectors costs more than one multi-threaded multiplication over the whole contiguous matrix. All three return identical results in every case.
+  The naive method is 2 to 9 times slower than no filter. Mask costs the same as no filter in every case. Prefilter wins only when a small share survives: copying out thousands of scattered vectors costs more than one multi-threaded multiplication over the whole contiguous matrix. All three return identical results in every case.
 - **Chosen:** `auto`: prefilter when at most 8% of units survive, mask otherwise. 8% lies between the laptop's crossover (between 6.4% and 9.5%) and stays safe on the 2-core machine, where prefilter kept winning up to about 20%.
 - **Trade-offs:** The crossover depends on hardware, so 8% is a tuned value, not a property of the method.
+- **Measurement note:** One run with the laptop busy doubled every stage at once, embedding and scoring included (unfiltered median 5.41 ms, p95 14.30 ms). It was discarded and re-run with the laptop plugged in and idle; the conclusions were the same in both runs.
 - **Implication for scale:** At this size, filtering can't make search much faster; it can only avoid making it slower. Its real value appears at large scale, where an index partitioned by classification would let a filter skip whole partitions without copying (Part 2).
-- **Interview explanation:** "I expected pre-filtering to always win, and measured three methods instead of assuming. The naive way, ranking first and filtering after, was 2 to 8 times slower. But pre-filtering only won below about 8% of the data surviving; above that, copying the surviving vectors cost more than scoring everything in place. So the engine picks the method from the filter's selectivity, and that threshold came from measurements on two machines, which also showed it moves with hardware."
+- **Interview explanation:** "I expected pre-filtering to always win, and measured three methods instead of assuming. The naive way, ranking first and filtering after, was 2 to 9 times slower. But pre-filtering only won below about 8% of the data surviving; above that, copying the surviving vectors cost more than scoring everything in place. So the engine picks the method from the filter's selectivity, and that threshold came from measurements on two machines, which also showed it moves with hardware."
 
 ### D13. Break score ties deterministically
 - **Status:** Validated
@@ -189,7 +190,7 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Alternatives:** Show every piece above a fixed score (rejected: scores aren't comparable across queries); show the top 3 regardless of score (rejected: weak third pieces are noise); rank patents by several pieces, for example the sum of their top 3 scores.
 - **Chosen:** Show the best piece, then up to two more that score within 0.10 of it, skipping another part of a piece already shown and repeated text. Count the further pieces within the margin and show that count ("+17 more passages within 0.10 of the best match"). Ranking still uses the best piece only.
 - **Rationale:** The count makes a patent's breadth of matches visible without changing the ranking. Changing how patents are ranked can only be justified by a relevance measurement, which doesn't exist yet.
-- **Trade-offs:** Fetching evidence now scores each top patent's own pieces again: about 0.3 ms per search instead of 0.05 ms, measured on the 2-core sandbox. Patents with many matches still don't rank higher.
+- **Trade-offs:** Fetching evidence now scores each top patent's own pieces again: 0.4 to 0.7 ms per search on the laptop, up from about 0.05 ms, which raised the unfiltered median from 2.26 to 2.48 ms. Patents with many matches still don't rank higher.
 - **Validation:** Unit tests on a hand-made index with known scores check the order, the margin, the cap, de-duplication, and that all filtering strategies give identical excerpts.
 - **Limitations:** The 0.10 margin is tuned on 12 queries for this model; another model's scores would need a new measurement.
 
