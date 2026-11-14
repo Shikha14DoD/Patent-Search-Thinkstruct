@@ -1,0 +1,7 @@
+# Versions the results were produced with. Newer versions should work,
+# but these are the ones the README's numbers come from.
+sentence-transformers==6.3.0
+torch==2.15.0
+numpy==2.5.4
+snowballstemmer==3.1.1
+pytest==9.2.0
