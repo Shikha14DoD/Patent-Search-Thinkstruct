@@ -118,7 +118,9 @@ def main() -> None:
             for strategy in strategies:
                 report = engine.search(filters=filters, top_k=args.top, strategy=strategy,
                                        query_vector=query_vectors[query])
-                outcomes[strategy] = [r.patent_id for r in report.results]
+                # Same patents, same order, and the same passages shown as evidence.
+                outcomes[strategy] = [(r.patent_id, tuple(e.label for e in r.excerpts))
+                                      for r in report.results]
                 if strategy == strategies[0]:
                     counts[label] = {
                         "eligible_patents": report.candidate_patents,
@@ -194,7 +196,7 @@ def main() -> None:
         f"(after {args.warmup} warm-up rounds), top {args.top} results",
         f"- Query embedding (same for every strategy, not included below): "
         f"median {embed['median']:.1f} ms, p95 {embed['p95']:.1f} ms",
-        f"- All strategies returned identical results: "
+        f"- All strategies returned identical results (patents, order and evidence passages): "
         f"{'yes' if not mismatches else 'NO - see results.json'}",
         "",
         "## Search time after the query is embedded (ms)",
