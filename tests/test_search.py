@@ -152,3 +152,72 @@ def test_filters_that_never_overlap_suggest_dropping_each(engine):
 def test_no_suggestions_when_there_are_results(engine):
     report = engine.search(filters=Filters(classification="B60B"))
     assert report.results and report.suggestions == []
+
+
+# -- filter edge cases ----------------------------------------------------------
+@pytest.fixture
+def titles(tmp_path):
+    """Five patents whose titles exercise phrase and exact-title boundaries."""
+    def patent(pid, title, code):
+        return make_patent(pid, title, f"Abstract of {title.lower()}.", code, ["1 . A part."])
+    patents = [patent("1", "WHEEL HUB ASSEMBLY", "B60B2700"),
+               patent("2", "FLYWHEEL HUB", "F16F1500"),
+               patent("3", "HUB FOR A WHEEL", "B60B2702"),
+               patent("4", "WHEEL HUB", "B60C2304"),
+               patent("5", "A WHEEL-HUB UNIT", "B60D1000")]
+    return make_engine(tmp_path, patents, {})
+
+
+def allowed(engine, **kwargs):
+    ids, _, _ = engine.resolve_filters(Filters(**kwargs))
+    return sorted(ids)
+
+
+def test_phrase_matches_whole_words_at_start_middle_end_and_whole_field(titles):
+    # start ("WHEEL HUB ASSEMBLY"), whole field ("WHEEL HUB"), middle ("A WHEEL-HUB UNIT");
+    # "FLYWHEEL HUB" must not match: "wheel" is only part of a word there.
+    assert allowed(titles, title_keywords='"wheel hub"') == ["1", "4", "5"]
+    assert allowed(titles, title_keywords='"hub assembly"') == ["1"]   # end of the field
+    assert allowed(titles, title_keywords='"hub wheel"') == []          # order matters
+
+
+def test_words_without_quotes_need_not_be_adjacent(titles):
+    assert allowed(titles, title_keywords="hub wheel") == ["1", "3", "4", "5"]
+
+
+def test_match_any_versus_all(titles):
+    assert allowed(titles, title_keywords="assembly unit") == []
+    assert allowed(titles, title_keywords="assembly unit", match_any=True) == ["1", "5"]
+
+
+def test_several_classification_prefixes_are_or_ed(titles):
+    assert allowed(titles, classification="B60B, F16F") == ["1", "2", "3"]
+    assert allowed(titles, classification="b60") == ["1", "3", "4", "5"]   # case-insensitive
+
+
+def test_filters_combine_with_and(titles):
+    assert allowed(titles, classification="B60B", title_keywords="wheel") == ["1", "3"]
+    assert allowed(titles, classification="B60B", title_keywords='"wheel hub"') == ["1"]
+
+
+def test_exact_title_ignores_case_and_punctuation_only(titles):
+    assert allowed(titles, exact_title="wheel hub") == ["4"]
+    assert allowed(titles, exact_title="Wheel-Hub") == ["4"]
+    assert allowed(titles, exact_title="wheel hubs") == []   # no stemming in exact titles
+
+
+def test_unknown_classification_matches_nothing(titles):
+    assert allowed(titles, classification="H04L") == []
+
+
+def test_filter_only_search_never_loads_the_model(titles):
+    titles.search(filters=Filters(classification="B60B"))
+    titles.search(filters=Filters(exact_title="WHEEL HUB"))
+    assert titles._model is None
+
+
+def test_same_search_twice_gives_identical_results(engine):
+    first = engine.search(query_vector=QUERY, top_k=2)
+    second = engine.search(query_vector=QUERY, top_k=2)
+    assert [(r.patent_id, [e.label for e in r.excerpts]) for r in first.results] == \
+           [(r.patent_id, [e.label for e in r.excerpts]) for r in second.results]
