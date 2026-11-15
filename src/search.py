@@ -116,6 +116,9 @@ class SearchReport:
     strategy: str = ""
     timings_ms: dict[str, float] = field(default_factory=dict)
     empty_reason: str = ""
+    # True when the filters matched only patents excluded from the results
+    # (in a "similar to this patent" search: only the source patent itself).
+    excluded_only: bool = False
     suggestions: list[Suggestion] = field(default_factory=list)
 
 
@@ -173,6 +176,72 @@ class PatentSearch:
     def embed_query(self, query: str) -> np.ndarray:
         return self.model.encode([query], convert_to_numpy=True,
                                  normalize_embeddings=True).astype(np.float32)[0]
+
+    # -- "similar to this patent" -----------------------------------------
+    def resolve_patent_id(self, raw: str) -> tuple[str | None, list[str]]:
+        """Match a typed patent ID to the corpus; (id, []) or (None, close IDs).
+
+        IDs are stored as bare publication numbers ("20240051333"). Users
+        copy them in many shapes: "US20240051333A1", "US 2024/0051333 A1",
+        "us2024-0051333". Case, spaces and punctuation are ignored, and a
+        leading country code and trailing kind code are stripped.
+        """
+        key = re.sub(r"[^A-Z0-9]", "", raw.upper())
+        key = re.sub(r"^US", "", key)
+        key = re.sub(r"(?<=\d)[ABCPSE]\d?$", "", key)
+        if key in self.patents:
+            return key, []
+        return None, difflib.get_close_matches(key, list(self.patents), n=3, cutoff=0.8)
+
+    def patent_vector(self, patent_id: str) -> tuple[np.ndarray, list[str]]:
+        """A query vector describing a patent, and the parts it was built from.
+
+        The abstract says what the invention is in plain words; the first
+        claim says what is actually protected. Each part is averaged over
+        its pieces (a long text is stored as several), and the two parts are
+        weighted equally. A patent with neither falls back to its
+        description. Built from stored vectors, so no model is needed.
+        """
+        start, end = (self.unit_rows_of(patent_id)
+                      if patent_id in self.patent_position else (0, 0))
+        if start == end:
+            raise ValueError(f"patent {patent_id} has no indexed text")
+        rows = range(start, end)
+
+        def unit_mean(selected: list[int]) -> np.ndarray:
+            vector = self.vectors[selected].mean(axis=0)
+            return vector / max(float(np.linalg.norm(vector)), 1e-12)
+
+        parts, used = [], []
+        abstract = [r for r in rows if self.units[r]["kind"] == "abstract"]
+        if abstract:
+            parts.append(unit_mean(abstract))
+            used.append("Abstract")
+        claims = [r for r in rows if self.units[r]["kind"] == "claim"]
+        if claims:
+            first = min(self.units[r]["position"] for r in claims)
+            parts.append(unit_mean([r for r in claims if self.units[r]["position"] == first]))
+            used.append(f"Claim {first}")
+        if not parts:
+            parts.append(unit_mean(list(rows)))
+            used.append("Description")
+        vector = np.mean(parts, axis=0)
+        vector /= max(float(np.linalg.norm(vector)), 1e-12)
+        return vector.astype(np.float32), used
+
+    def search_similar(self, patent_id: str, filters: Filters | None = None,
+                       top_k: int = 10, strategy: str = "auto",
+                       max_excerpts: int = MAX_EXCERPTS) -> tuple[SearchReport, list[str]]:
+        """Patents most similar to patent_id, never including itself.
+
+        Patents with an identical abstract are kept, not hidden: identical
+        text doesn't prove they are the same patent family (DECISIONS.md D13).
+        """
+        vector, used = self.patent_vector(patent_id)
+        report = self.search(filters=filters, top_k=top_k, strategy=strategy,
+                             query_vector=vector, max_excerpts=max_excerpts,
+                             exclude={patent_id})
+        return report, used
 
     # -- filters, resolved through the indexes ----------------------------
     @staticmethod
@@ -427,15 +496,17 @@ class PatentSearch:
             ranked.append((self.patent_order[positions[local]], float(best[local]), row))
         return ranked, int(rows.size)
 
-    def _rank_postfilter(self, scores: np.ndarray, filters: Filters,
-                         top_k: int) -> list[tuple[str, float, int]]:
+    def _rank_postfilter(self, scores: np.ndarray, filters: Filters, top_k: int,
+                         exclude: frozenset[str] = frozenset()
+                         ) -> list[tuple[str, float, int]]:
         """Naive baseline: rank every unit, then filter while walking down."""
         decided: dict[str, bool] = {}
         ranked: list[tuple[str, float, int]] = []
         for row in np.argsort(-scores, kind="stable"):
             patent_id = self.patent_order[self.unit_patent[row]]
             if patent_id not in decided:
-                decided[patent_id] = self._passes_without_index(patent_id, filters)
+                decided[patent_id] = (patent_id not in exclude
+                                      and self._passes_without_index(patent_id, filters))
                 if decided[patent_id]:
                     ranked.append((patent_id, float(scores[row]), int(row)))
                     if len(ranked) >= top_k:
@@ -446,11 +517,14 @@ class PatentSearch:
     def search(self, query: str = "", filters: Filters | None = None, top_k: int = 10,
                strategy: str = "auto",
                query_vector: np.ndarray | None = None,
-               max_excerpts: int = MAX_EXCERPTS) -> SearchReport:
+               max_excerpts: int = MAX_EXCERPTS,
+               exclude: set[str] | frozenset[str] = frozenset()) -> SearchReport:
         """Run one search.
 
         query_vector lets a caller that already embedded the query (the
-        benchmark) skip the embedding step. max_excerpts caps how many
+        benchmark, or a "similar to this patent" search) skip the embedding
+        step. exclude lists patents that must never be returned, such as the
+        source patent of a similarity search. max_excerpts caps how many
         matching pieces each result shows.
         """
         if strategy not in STRATEGIES:
@@ -467,6 +541,15 @@ class PatentSearch:
         if not naive:
             start = time.perf_counter()
             allowed, report.filter_counts, empty_reason = self.resolve_filters(filters)
+            if exclude:
+                matched_something = allowed is None or bool(allowed)
+                allowed = (set(self.patents) if allowed is None else allowed) - set(exclude)
+                if not allowed and matched_something:
+                    # The filters did match, but only excluded patents: no
+                    # filter change would help, so no suggestions either.
+                    report.excluded_only = True
+                    timings["total_ms"] = (time.perf_counter() - total_start) * 1000
+                    return report
             timings["filter_ms"] = (time.perf_counter() - start) * 1000
             if allowed is not None and not allowed:
                 report.empty_reason = empty_reason
@@ -515,11 +598,11 @@ class PatentSearch:
             scores = self.vectors @ query_vector
             timings["score_ms"] = (time.perf_counter() - start) * 1000
             start = time.perf_counter()
-            ranked = self._rank_postfilter(scores, filters, top_k)
+            ranked = self._rank_postfilter(scores, filters, top_k, frozenset(exclude))
             timings["rank_ms"] = (time.perf_counter() - start) * 1000
             report.scored_units = len(self.units)
             report.candidate_units = len(self.units)
-            report.candidate_patents = len(self.patents)
+            report.candidate_patents = len(self.patents) - len(exclude)
             report.strategy = "postfilter"
         elif strategy == "prefilter" and allowed_mask is not None:
             start = time.perf_counter()

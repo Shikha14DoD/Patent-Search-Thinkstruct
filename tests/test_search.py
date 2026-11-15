@@ -221,3 +221,56 @@ def test_same_search_twice_gives_identical_results(engine):
     second = engine.search(query_vector=QUERY, top_k=2)
     assert [(r.patent_id, [e.label for e in r.excerpts]) for r in first.results] == \
            [(r.patent_id, [e.label for e in r.excerpts]) for r in second.results]
+
+
+# -- "similar to this patent" ---------------------------------------------------
+@pytest.fixture
+def family(tmp_path):
+    """Real-looking IDs; 2 is the closest to 1, 3 is in another class, 4 has no abstract."""
+    patents = [
+        make_patent("20240000001", "SPOKE", "A hollow spoke.", "B60B2700", ["1 . A spoke."]),
+        make_patent("20240000002", "SPOKED WHEEL", "A wheel with spokes.", "B60B2700",
+                    ["1 . A wheel with a spoke."]),
+        make_patent("20240000003", "TIRE", "A tire.", "B60C2304", ["1 . A tire."]),
+        make_patent("20240000004", "HUB", "", "B60B2702", ["1 . A hub."]),
+    ]
+    scores = {("20240000001", "Abstract"): 0.9, ("20240000001", "Claim 1"): 0.9,
+              ("20240000002", "Abstract"): 0.85, ("20240000002", "Claim 1"): 0.8,
+              ("20240000003", "Abstract"): 0.1, ("20240000003", "Claim 1"): 0.1,
+              ("20240000004", "Claim 1"): 0.5}
+    return make_engine(tmp_path, patents, scores)
+
+
+def test_similar_search_never_returns_the_source_patent(family):
+    report, used = family.search_similar("20240000001", top_k=10)
+    ids = [r.patent_id for r in report.results]
+    assert "20240000001" not in ids and ids[0] == "20240000002" and len(ids) == 3
+    assert used == ["Abstract", "Claim 1"]
+    assert family._model is None                  # built from stored vectors
+
+
+def test_patent_ids_are_accepted_in_common_shapes(family):
+    for typed in ("20240000001", "US20240000001A1", "us 2024/0000001 a1", "US2024-0000001"):
+        assert family.resolve_patent_id(typed) == ("20240000001", [])
+    found, close = family.resolve_patent_id("2024000000")   # a digit short
+    assert found is None and close
+
+
+def test_similar_search_respects_filters_and_every_strategy_agrees(family):
+    outcomes = {
+        strategy: [r.patent_id for r in family.search_similar(
+            "20240000001", Filters(classification="B60B"), strategy=strategy)[0].results]
+        for strategy in ("prefilter", "mask", "postfilter", "auto")
+    }
+    assert outcomes["mask"] == ["20240000002", "20240000004"]
+    assert len(set(map(tuple, outcomes.values()))) == 1
+
+
+def test_filters_matching_only_the_source_say_so(family):
+    report, _ = family.search_similar("20240000001", Filters(exact_title="SPOKE"))
+    assert report.results == [] and report.excluded_only and report.suggestions == []
+
+
+def test_patent_without_abstract_uses_its_claim(family):
+    _, used = family.search_similar("20240000004")
+    assert used == ["Claim 1"]

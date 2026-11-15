@@ -5,11 +5,13 @@ Examples:
     python -m src.cli "wheel rim" --classification B60B --top 5
     python -m src.cli --title-keywords hub --classification B60B
     python -m src.cli --exact-title "PNEUMATIC TIRE"
+    python -m src.cli --similar-to US20240051333A1 --classification B60C
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import textwrap
 import time
 
@@ -26,6 +28,8 @@ def as_command(query: str, filters: Filters, args) -> str:
     parts = ["python -m src.cli"]
     if query:
         parts.append(_quote(query))
+    if getattr(args, "similar_to", None):
+        parts.append(f"--similar-to {args.similar_to}")
     for flag, value in (("--classification", filters.classification),
                         ("--exact-title", filters.exact_title),
                         ("--title-keywords", filters.title_keywords),
@@ -64,7 +68,12 @@ def main() -> None:
     parser.add_argument("--excerpts", type=int, default=MAX_EXCERPTS,
                         help="Most matching pieces shown per result")
     parser.add_argument("--full", action="store_true", help="Print whole excerpts")
+    parser.add_argument("--similar-to", default=None, metavar="PATENT_ID",
+                        help="Find patents similar to this one (e.g. US20240051333A1); "
+                             "filters still apply, no model is loaded")
     args = parser.parse_args()
+    if args.similar_to is not None and args.query:
+        parser.error("give either a query or --similar-to, not both")
 
     engine = PatentSearch(args.index)
     filters = Filters(
@@ -84,8 +93,27 @@ def main() -> None:
         engine.model
         model_load_s = time.perf_counter() - start
 
-    report = engine.search(args.query, filters, top_k=args.top, strategy=args.strategy,
-                           max_excerpts=args.excerpts)
+    source = None
+    if args.similar_to is not None:
+        source, close = engine.resolve_patent_id(args.similar_to)
+        if source is None:
+            hint = f" Did you mean: {', '.join(close)}?" if close else ""
+            print(f"Unknown patent ID {args.similar_to!r}: it is not in this index.{hint}")
+            sys.exit(2)
+        try:
+            report, used = engine.search_similar(source, filters, top_k=args.top,
+                                                 strategy=args.strategy,
+                                                 max_excerpts=args.excerpts)
+        except ValueError as error:
+            print(f"Cannot search for similar patents: {error}.")
+            sys.exit(2)
+        patent = engine.patents[source]
+        print(f"Patents similar to {source}: {patent['title']}")
+        print(f"(compared using its {' and '.join(used)})\n")
+    else:
+        report = engine.search(args.query, filters, top_k=args.top, strategy=args.strategy,
+                               max_excerpts=args.excerpts)
+    ranked = bool(args.query) or source is not None
 
     if report.filter_counts:
         print("Filters:")
@@ -94,26 +122,36 @@ def main() -> None:
         print()
 
     if not report.results:
+        if report.excluded_only:
+            print("No results: the filters match only the source patent itself.")
+            return
         if report.empty_reason:
             print(f"No results: the {report.empty_reason} filter matched nothing.")
         else:
             print("No results: each filter matches some patents, but none matches them all.")
-        if report.suggestions:
+        suggestions = report.suggestions
+        if source is not None:
+            # Moving filter words into a query can't combine with --similar-to.
+            suggestions = [s for s in suggestions if s.kind != "search_by_meaning"]
+        if suggestions:
             print("\nTry instead:")
-            for number, suggestion in enumerate(report.suggestions, start=1):
+            for number, suggestion in enumerate(suggestions, start=1):
                 print(f"  {number}. {suggestion.message}")
                 print(f"     {as_command(suggestion.query, suggestion.filters, args)}")
         return
 
-    if not args.query:
+    if not ranked:
         print("No query given: showing the filtered patents, newest first.\n")
 
     for result in report.results:
         print(f"#{result.rank}  {result.title}")
-        score = f" · score {result.score}" if args.query else ""
+        score = f" · score {result.score}" if ranked else ""
         print(f"    {result.patent_id} · {result.classification} · "
               f"published {result.publication_date}{score}")
         print(f"    {result.url}")
+        if source is not None and \
+                engine.patents[result.patent_id]["abstract"] == engine.patents[source]["abstract"]:
+            print("    Same abstract as the source patent (possibly the same patent family)")
         if not result.excerpts:
             # Without a query nothing was matched: the abstract is a preview.
             note = f" ({result.excerpt_note})" if result.excerpt_note else ""
@@ -130,7 +168,7 @@ def main() -> None:
                   f"{EXCERPT_MARGIN:.2f} of the best match")
         print()
 
-    if args.query:
+    if ranked:
         print(f"Strategy {report.strategy}: {report.candidate_patents} of "
               f"{len(engine.patents)} patents eligible, "
               f"{report.scored_units} of {report.total_units} units scored")
