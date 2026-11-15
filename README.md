@@ -1,9 +1,14 @@
-# Patent search engine
+# Patent Evidence Explorer
 
-Search 640 vehicle-related US patent applications by meaning, narrow the results with strict
-filters, and see exactly which claim or paragraph matched. Built for the Thinkstruct take-home.
+Semantic patent search that shows the claim or paragraph behind every result, with strict
+filters on classification, title and abstract.
 
-Every design choice, with the measurements behind it, is in [`DECISIONS.md`](DECISIONS.md).
+**Current corpus:** 640 US patent application publications from a vehicle-domain sample
+(wheels, tires and couplings), published February 2024 to May 2025. Nothing in the engine is
+specific to vehicles: classification codes and vocabulary come from the data.
+
+Built as a take-home project for Thinkstruct. Every design choice, with the evidence behind
+it, is in [`DECISIONS.md`](DECISIONS.md).
 
 ## Problem statement
 
@@ -21,6 +26,16 @@ similar patents, show the specific passages that match, and let the user narrow 
 with strict filters on classification, title and abstract keywords, and exact title.**
 
 It is a retrieval tool for a person to review, not a judge of novelty or infringement.
+
+## Engineering highlights
+
+| Problem found | What the engine does | Evidence |
+|---|---|---|
+| A third of claims lost their printed number, and cancelled claims shift the numbering | Rebuilds claim numbers from printed numbers and cancelled ranges; flags inferred ones | 96.7% of "according to claim N" references resolve; unit tests |
+| The model reads 256 tokens; 17% of dependent claims were losing their own text | Splits text by the model's own token count; a claim's own words always fit | 0 of 34,551 units over the limit; unit tests |
+| Filtering first was assumed to be always faster | Measured three filtering methods; picks one by how many passages survive | Benchmark below: identical results, crossover between 6% and 10% of passages |
+| Evidence must be traceable | Keeps the raw source text beside the cleaned text; marks inferred labels | Every result shows its passage, label and caveats |
+| Semantic search was assumed to beat keywords | Measured against a BM25 keyword baseline on 614 queries | Keyword search won on this test; see [Search quality](#search-quality) |
 
 ## What it does
 
@@ -85,9 +100,79 @@ skipped, and patents without a description stay searchable through their title, 
 claims (D1). Other data problems found and fixed are listed in `DECISIONS.md` (D2 to D7). The
 weekly date in the file names is the A1 **publication** date, not the filing date (D3).
 
-## Hybrid search and efficiency
+"Description para N" in results is the Nth non-blank paragraph of the description in this
+dataset. The source has no official paragraph numbers, so N can differ from the `[00NN]`
+numbering in the published document.
 
-In the brief, hybrid search means combining similarity search with strict constraints. The
+## Search quality
+
+Search quality was tested twice, because the first test turned out to favour one method. The
+first result was unexpected, so rather than explain it away I ran a second test to check why.
+
+### Check 1: finding a patent from its own claim (automated, reproducible)
+
+Each patent's first claim is used as the query, with that patent's claims hidden, so the
+search can only find it through its abstract and description. 614 patents were tested (26 with
+an identical twin were skipped); ranks are out of 640. Full results:
+[`evaluation/self_retrieval.md`](evaluation/self_retrieval.md).
+
+| Ranking | Found first (Recall@1) | In top 10 (Recall@10) | MRR |
+|---|---:|---:|---:|
+| Semantic (`all-MiniLM-L6-v2`, the current default) | 52.4% | 82.2% | 0.627 |
+| BM25 keyword baseline | 86.5% | 93.8% | 0.893 |
+| Combined (reciprocal rank fusion, untuned) | 70.0% | 89.9% | 0.769 |
+
+Keyword matching clearly won. Part of that is the test itself: in 344 of the 614 patents, the
+description repeats every distinctive word of the claim. But keyword search also won where some
+of those words were missing (74.1% against 45.2% found first), so the general-purpose model,
+trained on web text and reading only the first 256 tokens of a long claim, is genuinely weaker
+at telling similar patents apart when the wording matches.
+
+What this test can't show is the case semantic search exists for: a user describing an idea in
+their own words, different from the patent's.
+
+### Check 2: paraphrased queries (everyday language, exploratory)
+
+To test that case, 12 technical information needs were written (for example, preventing wheel theft,
+or tyres that inflate themselves), each in two wordings: everyday language, and wording close to
+the patents' own terms. That gave 24 queries. The queries and grading rules were fixed before any
+results were seen. Each method's results were pooled (355 patents in all) and graded 0–2 for
+relevance, blind to which method returned each patent and at what rank. Scores are nDCG@10,
+which rewards putting the most relevant patents near the top.
+
+| Query wording | Semantic | BM25 | Combined |
+|---|---:|---:|---:|
+| Everyday language | **0.475** | 0.335 | 0.468 |
+| Patent terminology | 0.836 | 0.807 | **0.844** |
+
+- Semantic search beat BM25 on 8 of the 12 everyday-language needs. The biggest gaps came where
+  the query and the patent shared almost no words: for wheel theft, the first relevant patent was
+  at rank 2 with semantic search and rank 118 with BM25; for self-inflating tyres, rank 4 against 45.
+- With patent terminology, all three methods were close.
+
+**How far to trust it:** this is suggestive, not conclusive. It covers only 12 needs, and the 95%
+interval for semantic search's advantage on everyday language is about −0.001 to +0.30, which
+only just touches zero. Relevance was graded by an LLM (Claude), not by people, and the same
+model helped write the queries; an LLM judges by meaning, which may lean toward semantic search.
+Grading only covered pooled results, so relevant patents that no method found are missed. It was
+run in a separate session, and its queries and grades are not in this repository, so unlike
+check 1 it can't be reproduced from here.
+
+### What the two checks show together
+
+- **They agree rather than conflict.** BM25 is strong when the query uses the patent's own
+  wording; semantic search is stronger when it doesn't.
+- **Semantic search stays the default.** Natural-language descriptions of an invention are the
+  main use case, and that is where check 2 favours it. Switching to BM25 on check 1 alone would
+  have meant choosing the default on a test built in its favour.
+- **Combining the two is never far from the best.** It nearly tied semantic search on everyday
+  language, scored highest on patent terminology, and sat between the two on check 1. That makes
+  it the natural next candidate for the default, but the gains are small, so it needs a larger,
+  human-judged test before it's adopted (D18).
+
+## Structured filtering and retrieval performance
+
+The brief calls this *hybrid search*: semantic retrieval combined with strict constraints. The
 benchmark runs 12 fixed queries, 30 times each, under 8 filter scenarios, and compares three
 ways to apply the filters:
 
@@ -98,22 +183,27 @@ ways to apply the filters:
 - **Postfilter (naive):** rank every vector, then walk down the ranking checking each patent's
   text against the filters, with no lookup tables.
 
-Median milliseconds per search, once the query is embedded (8-core Windows laptop, plugged in
-and idle; full tables in [`benchmarks/results.md`](benchmarks/results.md)):
+Median times per search once the query is embedded, on an 8-core Windows 11 laptop, plugged in
+and idle, with the model already loaded (full tables in
+[`benchmarks/results.md`](benchmarks/results.md)):
 
-| Filter | Patents left | Share of pieces | Prefilter | Mask | Postfilter (naive) |
-|---|---:|---:|---:|---:|---:|
-| None | 640 | 100% | – | 2.48 | – |
-| Classification B60B | 298 | 44.2% | 9.14 | **2.53** | 5.99 |
-| Title/abstract: tread | 156 | 28.9% | 6.22 | **2.56** | 7.33 |
-| Classification B60C11 | 101 | 19.1% | 4.32 | **2.42** | 5.88 |
-| B60C + title: pneumatic | 94 | 17.7% | 5.39 | **3.21** | 9.54 |
-| Abstract: tread groove | 45 | 9.5% | 2.83 | **2.59** | 13.88 |
-| Exact title "PNEUMATIC TIRE" | 33 | 6.4% | **2.88** | 3.07 | 10.32 |
-| Title/abstract: sensor | 32 | 5.2% | **2.10** | 2.71 | 21.22 |
+| Filter | Patents left | Share of pieces | Prefilter (ms) | Mask (ms) | Naive postfilter (ms) | Auto picks |
+|---|---:|---:|---:|---:|---:|---|
+| None | 640 | 100% | – | 2.48 | – | no filter |
+| Classification B60B | 298 | 44.2% | 9.14 | **2.53** | 5.99 | mask |
+| Title/abstract: tread | 156 | 28.9% | 6.22 | **2.56** | 7.33 | mask |
+| Classification B60C11 | 101 | 19.1% | 4.32 | **2.42** | 5.88 | mask |
+| B60C + title: pneumatic | 94 | 17.7% | 5.39 | **3.21** | 9.54 | mask |
+| Abstract: tread groove | 45 | 9.5% | 2.83 | **2.59** | 13.88 | mask |
+| Exact title "PNEUMATIC TIRE" | 33 | 6.4% | **2.88** | 3.07 | 10.32 | prefilter |
+| Title/abstract: sensor | 32 | 5.2% | **2.10** | 2.71 | 21.22 | prefilter |
 
-Bold marks the method the engine picks automatically. All three methods returned identical
-results in every case. Embedding the query takes a median of 8.1 ms on top of these times.
+All three methods returned the same patents, in the same order, with the same evidence
+passages, in every case.
+
+**Latency as a user sees it.** Embedding the query takes a median of 8.1 ms, so a warm search
+takes about 10 to 11 ms end to end. Starting the CLI adds a one-off 13 s to load the model and
+0.3 s to load the index; a long-running service would pay that once.
 
 **What the numbers show**
 
@@ -145,16 +235,18 @@ results in every case. Embedding the query takes a median of 8.1 ms on top of th
 
 ### What I would use at large scale
 
-At 10 million patents, the same design means about 540 million vectors, roughly 830 GB as
-384-dimensional float32. Scoring grows linearly, about 54 ms per million vectors on this
-laptop, so exact search would take tens of seconds per query. What would change:
+As an illustrative scenario, not a capacity plan: if 10 million patents split like this sample
+(about 54 pieces each), the same design would mean about 540 million vectors, roughly 830 GB as
+384-dimensional float32 before any index structures or copies. As an order of magnitude,
+scoring took about 54 ms per million vectors on this laptop, so exact search at that size would
+take tens of seconds per query. What would change (designed in Part 2):
 
 - **Approximate nearest-neighbour search** (HNSW or IVF with product quantization) with
   filter-aware search. Compressing each vector to a 64-byte code would bring the 830 GB to
   about 35 GB.
 - **An index partitioned by classification,** so a classification filter skips whole
   partitions instead of copying vectors. That turns filtering into a real speed-up, which it
-  can't be at this size.
+  can't be at this size. Queries without a classification filter still search every partition.
 - **Keyword filters in a search engine or database index** (OpenSearch, or Postgres with GIN
   indexes) and metadata in a database, instead of in-memory dictionaries and a 44 MB pickle
   loaded at start-up.
@@ -241,15 +333,25 @@ machine; run it plugged in and idle (a run with the laptop busy doubled every st
 pattern should hold: naive filtering slowest, prefilter winning only for very selective
 filters.
 
-### 6. Run the tests
+### 6. Check search quality
+
+```
+python evaluation/self_retrieval.py
+```
+
+About a minute. It writes `evaluation/self_retrieval.md` and should reproduce the check 1 table
+in Search quality exactly.
+
+### 7. Run the tests
 
 ```
 python -m pytest tests -q
 ```
 
-25 tests check the cleaning rules (claim numbering, numeral separation, token limits) and the
-search (excerpts, filter strategies, suggestions) on a tiny hand-made index. They need neither
-the model nor the dataset.
+41 tests check the cleaning rules (claim numbering, numeral separation, token limits), the
+search (filters and their edge cases, filtering strategies, excerpts, suggestions), the BM25
+baseline and the self-retrieval ranking, on tiny hand-made indexes. They need neither the model
+nor the dataset.
 
 ## Repository layout
 
@@ -259,22 +361,26 @@ src/text_utils.py     word normalisation shared by indexing and filters
 src/build_index.py    embeddings, embedding cache, filter lookup tables
 src/search.py         search, filters, filtering strategies, excerpts, suggestions
 src/cli.py            command-line interface
+src/bm25.py           BM25 keyword ranking, the evaluation baseline
 benchmarks/timing.py  filters-on vs filters-off benchmark
+evaluation/self_retrieval.py   automated search-quality check
 tests/                unit tests
 DECISIONS.md          decision log with evidence
 ```
 
 ## Limitations
 
-- **Search quality is not measured yet, only speed.** Results were checked by hand; there is no
-  relevance metric, so the model and ranking choices are not yet validated against
-  alternatives.
+- **Search quality evidence is limited.** The reproducible check is a proxy that favours keyword
+  matching; the everyday-language check is small, LLM-graded and not in this repository. Neither
+  is a human-judged prior-art evaluation. The model was chosen as a light CPU baseline, not as the
+  best model for patents.
 - Keyword filters match words, not synonyms; "search by meaning" covers that, across all text.
 - Patents are ranked by their single best passage; a patent with many matching passages shows
   a count but doesn't rank higher (D16).
-- Planned next: finding patents similar to a given patent ID. Deferred: keyword ranking
-  blended with semantic ranking (BM25), fuzzy title matching, links that open the patent at the
-  matching passage, and a "related by meaning" section after strict results (D15).
+- Planned next: finding patents similar to a given patent ID, and a choice of ranking
+  (semantic, keyword or combined), backed by the checks above (D18). Deferred: fuzzy title
+  matching, links that open the patent at the matching passage, and a "related by meaning"
+  section after strict results (D15).
 
 **What the data can support.** The sample is 640 vehicle-related US patent applications
 published between February 2024 and May 2025. It cannot support real prior-art, novelty or

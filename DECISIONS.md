@@ -13,7 +13,7 @@ reversal is part of the record.
 `benchmarks/results.md`, measured on an 8-core Windows 11 laptop with Python 3.12 and NumPy 2.5.
 Token counts use the model's own tokenizer.
 
-Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope.
+Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope; D18 measures search quality.
 
 ---
 
@@ -28,7 +28,6 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Rationale:** Dropping 119 patents (19% of the sample) would hide patents that may well be relevant; their claims are often the most important text anyway. Blank paragraphs carry nothing to search.
 - **Trade-offs:** Those 119 patents can never show a description paragraph as evidence.
 - **Validation:** The ingest report counts blank paragraphs and patents without a description on every build.
-- **Interview explanation:** "Half the description paragraphs in the data are empty strings, and 119 patents have no description at all. I kept every patent and just skipped the blanks, because dropping a fifth of the corpus would hide patents whose claims could be exactly what the user needs."
 
 ### D2. Take claim numbers from the printed number, never from list position
 - **Status:** Validated (revised: the first version used list position)
@@ -40,7 +39,6 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Trade-offs:** 3,223 claims carry an inferred number. An inference error would mislabel a claim.
 - **Validation:** Dependent claims cite their parent by number ("according to claim 6"), which gives an independent check. After parsing, 96.7% of those citations point at a claim that exists, and 4,300 point at numbers that were inferred. The patents' own cross-references agree with the reconstruction. Unit tests cover the cancelled-range case.
 - **Limitations:** 3.3% of citations still point at a claim number that doesn't exist in the parsed patent (237 references), likely conversion damage in the source.
-- **Interview explanation:** "A third of the claims had lost their number in conversion, and some patents start with cancelled claims, so counting list positions put every label off. I rebuilt the numbering from the printed numbers and the cancelled ranges, flagged the inferred ones, and then checked the result against the patents' own cross-references: 96.7% of 'according to claim N' citations land on a claim we produced, including 4,300 on numbers we inferred."
 
 ### D3. The weekly date is the publication date, not the filing date
 - **Status:** Validated (revised: the first version called it `filing_date`)
@@ -48,7 +46,6 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Evidence:** File names such as `US20240051333A1-20240215.XML`: A1 marks a pre-grant publication, and the date is when it was published. Applications usually publish about 18 months after filing.
 - **Chosen:** Store and display it as `publication_date`.
 - **Trade-offs:** No filing date is available in this data.
-- **Interview explanation:** "I'd first labelled it a filing date. The A1 kind code says it's a publication, which comes about 18 months after filing, so calling it a filing date would have made any date-based reasoning wrong."
 
 ### D4. Separate reference numerals glued to words, in descriptions only
 - **Status:** Validated
@@ -64,7 +61,8 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 ### D5. Keep raw text alongside cleaned text
 - **Status:** Validated
 - **Problem:** Cleaning is lossy; a reviewer must be able to see what the source said.
-- **Chosen:** Each unit stores the embedded text, the displayed text and the raw source text. Notes mark reconstructed or added content: "claim number inferred", "opening text missing in source", and "matched together with Claim N, which it depends on".
+- **Chosen:** Each unit stores the embedded text, the displayed text and the raw source text. Notes mark reconstructed or added content: "claim number inferred", "opening text missing in source", and "with Claim N as context".
+- **Limitation:** "Description para N" is the Nth non-blank paragraph of the description in this dataset. The source carries no official paragraph numbers (none of the 21,221 non-blank paragraphs starts with a `[00NN]` marker), so N can differ from the published document's numbering; 24 short heading-like lines are counted too. The README says so.
 
 ### D6. Don't index description paragraphs under five words
 - **Status:** Validated
@@ -82,22 +80,20 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Alternatives:** Word-count splitting (the first version, which underestimated patent text's token density); dropping parent context entirely; a model with a longer input limit.
 - **Chosen:** Split by token count, measured with the model's tokenizer. A claim's own text always fits; the parent claim (or title) is trimmed to the space left, and dropped if under 16 tokens remain. Long claims and abstracts are split into labelled parts like paragraphs.
 - **Validation:** The build now counts units over the limit: 0 of 34,551. 2,150 texts were split, 1,207 parent contexts trimmed, 6 dropped. Unit tests check that every unit fits and that a dependent claim's own text survives. For five test queries, 8 to 10 of the top 10 results were unchanged, consistent with the fix mainly affecting claims.
-- **Interview explanation:** "I'd been splitting text by word count and assumed it fit the model. When I measured with the real tokenizer, 17% of dependent claims were losing the end of their own text, because I'd prepended the parent claim. Now the claim's own words always fit, the parent context is trimmed to whatever space is left, and the build verifies that zero units exceed the limit."
 
 ---
 
 ## Search
 
 ### D8. Search passages, rank each patent by its best passage
-- **Status:** Validated for evidence; relevance not yet measured
+- **Status:** Validated for evidence; relevance measured in part (D18)
 - **Problem:** Choose the unit that is embedded and compared with the query.
 - **Evidence:** A patent with a description has a median of 4,195 description tokens (90th percentile 10,303). Only 1.7% of whole patents would fit in 512 tokens, none in 256. By contrast, a single claim has a median of 42 tokens, a description chunk 103 and an abstract 147.
 - **Alternatives:** (A) whole patents: the model would see only the first 256 tokens, about 6% of a typical patent. (B) Patent-level retrieval, then evidence extraction: smaller index, but the first stage can miss a patent whose only relevant passage is a single claim. (C) Separate abstract and passage indexes: duplication and more complex ranking, without a measured need.
 - **Chosen:** Index abstracts, claims and description chunks (34,551 units, 54 per patent). A patent's score is its best unit's score, and that unit is the evidence shown.
 - **Rationale:** It is the only option where the evidence shown is the text that actually matched, and no part of a patent is invisible to the search.
 - **Trade-offs:** 54 vectors per patent instead of one. At 10 million patents that is roughly 540 million vectors, about 830 GB as 384-dimensional float32, so Part 2 needs approximate search and compression. Long patents get more chances at a high-scoring passage.
-- **Validation still needed:** A relevance evaluation (see D14 and D15).
-- **Interview explanation:** "A typical patent here is over 4,000 tokens and the model reads 256, so embedding whole patents would mean judging each one by its first page. Searching passages means every claim and paragraph is searchable, and the result can show exactly which claim matched. The price is 54 vectors per patent, which matters at 10 million patents, and that's a Part 2 problem I can size precisely."
+- **Validation:** Relevance measured in part by D18's two checks; a human-judged evaluation is still needed (D15).
 
 ### D9. all-MiniLM-L6-v2 with exact search in NumPy
 - **Status:** Provisional (model); Validated (exact search at this scale)
@@ -107,7 +103,7 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Chosen:** all-MiniLM-L6-v2: small, fast on CPU, widely used, and quick for a reviewer to reproduce. Exact search with one matrix multiplication.
 - **Rationale:** At about 2.5 ms, an approximate index would add infrastructure and a recall loss to save almost nothing, since query embedding dominates the request.
 - **Trade-offs:** The model isn't tuned for patent language. Exact search grows linearly; around a million vectors it would reach tens of milliseconds.
-- **Not done, and why:** Comparing models requires a relevance metric. Without an evaluation set, a model swap would be guesswork, so the comparison is deferred together with evaluation.
+- **Not done, and why:** Comparing models requires a relevance metric. D18 now provides one, and shows the model is weaker than BM25 when wording matches, but a model swap is still deferred: the reproducible check favours keywords, so it can't rank models fairly on its own.
 
 ### D10. Cache embeddings by model and exact text
 - **Status:** Validated
@@ -149,7 +145,6 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Trade-offs:** The crossover depends on hardware, so 8% is a tuned value, not a property of the method.
 - **Measurement note:** One run with the laptop busy doubled every stage at once, embedding and scoring included (unfiltered median 5.41 ms, p95 14.30 ms). It was discarded and re-run with the laptop plugged in and idle; the conclusions were the same in both runs.
 - **Implication for scale:** At this size, filtering can't make search much faster; it can only avoid making it slower. Its real value appears at large scale, where an index partitioned by classification would let a filter skip whole partitions without copying (Part 2).
-- **Interview explanation:** "I expected pre-filtering to always win, and measured three methods instead of assuming. The naive way, ranking first and filtering after, was 2 to 9 times slower. But pre-filtering only won below about 8% of the data surviving; above that, copying the surviving vectors cost more than scoring everything in place. So the engine picks the method from the filter's selectivity, and that threshold came from measurements on two machines, which also showed it moves with hardware."
 
 ### D13. Break score ties deterministically
 - **Status:** Validated
@@ -160,7 +155,7 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Related:** Patents with identical abstracts are not merged; identical text doesn't prove they are the same patent family.
 
 ### D14. Semantic ranking only for now; keyword (BM25) fusion deferred
-- **Status:** Deferred
+- **Status:** Deferred; BM25 baseline and fusion since measured (D18)
 - **Problem:** Embeddings match meaning; keyword ranking matches exact terms. Combining them may help.
 - **Evidence:** "wheel rim" is the kind of query where keyword ranking helps: the query's exact words are a patent's title. Semantic search still ranks that patent first after D6, but by a small margin (0.703 vs 0.698).
 - **Why deferred:** Without a relevance metric there is no way to show whether fusion helps or hurts, and fusion adds a tuning parameter. A measured BM25 baseline belongs with the evaluation work.
@@ -173,7 +168,8 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 |---|---|---|
 | Fuzzy title matching | Deferred | Exact normalised matching meets the brief; fuzzy matching needs tuning and a test set. |
 | Million-vector synthetic benchmark | Deferred | Part 2 or Part 3; the real crossover data above already answers the brief's question at this size. |
-| Relevance evaluation (self-claim retrieval with leakage controls, hand-reviewed queries) | Deferred | Needed before BM25 or model comparisons; a candidate for Part 3. |
+| Relevance evaluation | Partly done (D18) | An automated self-retrieval check with a BM25 baseline is in the repo, and an exploratory everyday-language check was run separately (LLM-graded, not in the repo). A human-judged evaluation is deferred; a blind human-judging harness was built and then removed as out of proportion for this scope. |
+| Choice of ranking: semantic, keyword or combined (`--ranking`) | Deferred, evidence in hand | D18's two checks point in opposite directions by query wording; combining is never far from the best, but the gains are small, so the default waits for a larger, human-judged test. |
 | "Find patents similar to this patent ID" | **Planned: will be built** | Input a patent number from the dataset; its abstract and independent claims become the query, the patent itself is excluded from the results, and all filters still apply. Covers the brief's example input "an entire patent (given by patent ID)". |
 | Restricting search to claims or descriptions only | Deferred | Small; outside the first milestone. |
 | Flagging identical abstracts as possibly related | Deferred | Needs a careful label; identical text is not proof of a patent family. |
@@ -189,7 +185,7 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Evidence:** Over the top 10 results of 12 test queries, a patent's second-best piece scored a median of 0.050 below its best (90th percentile 0.137), and its third-best 0.075 below. With a 0.10 margin, the second piece qualifies for 80% of results and the third for 66%; with 0.05, only 49% and 32%. Picking pieces naively would have shown the same evidence twice 18 times (another part of the same claim or paragraph, or identical text).
 - **Alternatives:** Show every piece above a fixed score (rejected: scores aren't comparable across queries); show the top 3 regardless of score (rejected: weak third pieces are noise); rank patents by several pieces, for example the sum of their top 3 scores.
 - **Chosen:** Show the best piece, then up to two more that score within 0.10 of it, skipping another part of a piece already shown and repeated text. Count the further pieces within the margin and show that count ("+17 more passages within 0.10 of the best match"). Ranking still uses the best piece only.
-- **Rationale:** The count makes a patent's breadth of matches visible without changing the ranking. Changing how patents are ranked can only be justified by a relevance measurement, which doesn't exist yet.
+- **Rationale:** The count makes a patent's breadth of matches visible without changing the ranking. Changing how patents are ranked can only be justified by a relevance measurement; D18 measures overall ranking, not this choice.
 - **Trade-offs:** Fetching evidence now scores each top patent's own pieces again: 0.4 to 0.7 ms per search on the laptop, up from about 0.05 ms, which raised the unfiltered median from 2.26 to 2.48 ms. Patents with many matches still don't rank higher.
 - **Validation:** Unit tests on a hand-made index with known scores check the order, the margin, the cap, de-duplication, and that all filtering strategies give identical excerpts.
 - **Limitations:** The 0.10 margin is tuned on 12 queries for this model; another model's scores would need a new measurement.
@@ -209,6 +205,43 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Evidence:** Computing the suggestions takes 0.2 to 4.5 ms (median of 20 runs per case, 2-core sandbox), and only runs when a search returns nothing.
 - **Validation:** Seven unit tests on the hand-made index: spelling, any-word, unknown classification, near title, moving words into the query, filters that never overlap, and no suggestions when there are results.
 - **Limitations:** "Search by meaning" searches all of a patent's text, not just the field the filter named, because searching one field by meaning isn't built (D15). Spelling suggestions cover single words, not phrases. The near-title suggestion is a hint only; matching itself stays exact.
+
+## D18. Measure search quality with two complementary checks; keep semantic ranking as the default
+- **Status:** Validated (check 1, reproducible); check 2 exploratory; default ranking Provisional
+- **Problem:** Speed was measured thoroughly, but search quality not at all. The choice of a semantic model over keyword search rested on an assumption.
+- **History:** A blind, pooled evaluation was built first: both methods' top 5 for 10 queries, shuffled, with relevance rules written in advance, for a person to judge (about 80 judgments). Weighed against the take-home's roughly two-hour scope, it was out of proportion, so it was replaced by an automated check that needs no judging. Git history keeps the first version.
+- **Check 1, self-retrieval (in the repo):** For each patent, its first claim is the query and that patent's own claims are hidden, so it can only be found through its abstract and description. The rank of the patent among all 640 is recorded for the semantic search, a BM25 keyword baseline (`src/bm25.py`, same passages, tokenizer, filters and best-passage ranking), and a combination of the two by reciprocal rank fusion (k = 60, the standard value, not tuned on this test). 26 patents with an identical twin are skipped: the twin's visible claims would be found first, which isn't a miss.
+- **Check 1 evidence (`evaluation/self_retrieval.md`, 614 queries):**
+
+  | Ranking | Recall@1 | Recall@10 | MRR |
+  |---|---:|---:|---:|
+  | Semantic | 52.4% | 82.2% | 0.627 |
+  | BM25 | 86.5% | 93.8% | 0.893 |
+  | Combined | 70.0% | 89.9% | 0.769 |
+
+  Per query, semantic ranked the patent higher in 28 cases and BM25 in 257. In 344 patents the description repeats every distinctive word of the claim (Recall@1: semantic 58.1%, BM25 96.2%); in the 270 where some are missing, BM25 still won (45.2% against 74.1%).
+- **Why a second check:** Check 1 favours keywords, since a patent's description usually repeats its claim's wording, and it can't test the case semantic search exists for: a user describing an idea in words different from the patent's. Rather than accept or dismiss the result on reasoning alone, that explanation was tested.
+- **Check 2, paraphrase test (everyday-language queries, exploratory, run separately):** 12 technical information needs, each written twice: in everyday language and in wording close to the patents' terms (24 queries). Queries and grading rules were fixed before results were seen. The three methods' results were pooled (355 patents) and graded 0–2 for relevance, blind to method and rank. Metric: nDCG@10.
+
+  | Query wording | Semantic | BM25 | Combined |
+  |---|---:|---:|---:|
+  | Everyday language | 0.475 | 0.335 | 0.468 |
+  | Patent terminology | 0.836 | 0.807 | 0.844 |
+
+  Semantic beat BM25 on 8 of the 12 everyday-language needs, most clearly where query and patent shared almost no words (wheel theft: first relevant patent at rank 2 against 118; self-inflating tyres: 4 against 45). The 95% interval for semantic's advantage on everyday language is about −0.001 to +0.30.
+- **Interpretation:** The two checks agree rather than conflict. BM25 is strong when the query uses the patent's wording; semantic search is stronger when it doesn't. The general-purpose model (trained on web text, 384 dimensions, reading only the first 256 tokens of a query) is still weaker than BM25 at separating near-identical patents when the wording matches.
+- **Decision:** Semantic search stays the default, because natural-language descriptions of an invention are the main use case and check 2 favours it there. Combining the two is never far from the best (nearly tied with semantic on everyday language, highest on patent terminology, between the two on check 1), so it is the next candidate for the default. The gains are small, so it waits for a larger, human-judged test.
+- **Alternatives:** BM25 as the default (best on check 1, clearly worst on everyday language); combined as the default now (defensible, but the evidence for a gain is thin); a human-judged pooled evaluation (built, then removed for scope).
+- **Trade-offs and limits:** Check 1 is a proxy, not prior-art relevance. Check 2 covers only 12 needs, and its interval only just touches zero, so it is suggestive, not conclusive. It was graded by an LLM (Claude) rather than people, and the same model helped write the queries; an LLM judges by meaning, which may favour semantic search. Grading covered only pooled results, so relevant patents no method found are missed. Its queries and grades are not in this repository, so it can't be reproduced from here. Both checks use one corpus of near-identical tire patents.
+- **Validation:** Three unit tests on the check 1 ranking logic (own claims hidden, BM25 zero score is a miss, first claim chosen after cancelled ones); four on the BM25 baseline.
+
+## D19. Cache word stemming
+- **Status:** Validated
+- **Problem:** Building the BM25 index took 47.7 s on the 2-core sandbox.
+- **Evidence:** Almost all of it was stemming: about 3.35 million word occurrences, but only 19,979 distinct words.
+- **Chosen:** Cache each word's stem (`functools.lru_cache` on `stem`).
+- **Result:** 2.0 s, 24 times faster (3,348,406 cache hits, 19,979 misses). The same function serves the filter indexes and keyword parsing, so they benefit too. All tests still pass.
+- **Trade-offs:** Memory for about 20,000 cached words, which is negligible.
 
 ## Later experiments (not yet run)
 
