@@ -170,9 +170,9 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 | Million-vector synthetic benchmark | Deferred | Part 2 or Part 3; the real crossover data above already answers the brief's question at this size. |
 | Relevance evaluation | Partly done (D18) | An automated self-retrieval check with a BM25 baseline is in the repo, and an exploratory everyday-language check was run separately (LLM-graded, not in the repo). A human-judged evaluation is deferred; a blind human-judging harness was built and then removed as out of proportion for this scope. |
 | Choice of ranking: semantic, keyword or combined (`--ranking`) | Deferred, evidence in hand | D18's two checks point in opposite directions by query wording; combining is never far from the best, but the gains are small, so the default waits for a larger, human-judged test. |
-| "Find patents similar to this patent ID" | **Planned: will be built** | Input a patent number from the dataset; its abstract and independent claims become the query, the patent itself is excluded from the results, and all filters still apply. Covers the brief's example input "an entire patent (given by patent ID)". |
+| "Find patents similar to this patent ID" | **Built (D20)** | `--similar-to`: the patent's abstract and first claim become the query, the patent itself is excluded, and all filters still apply. Covers the brief's example input "an entire patent (given by patent ID)". |
 | Restricting search to claims or descriptions only | Deferred | Small; outside the first milestone. |
-| Flagging identical abstracts as possibly related | Deferred | Needs a careful label; identical text is not proof of a patent family. |
+| Flagging identical abstracts as possibly related | Partly done (D20) | Flagged in similar-patent results only, worded as "possibly the same patent family"; identical text is not proof of one. |
 | Links that open the patent at the matching passage | Deferred, if time allows | Planned with browser text fragments (`#:~:text=...`), one link per excerpt; needs a check that Google Patents' page text matches our passages. If the words aren't found, the link still opens the patent. |
 | "Related by meaning" section after strict results | Deferred, if time allows | A separate, labelled list shown on expand: the same query re-run without the keyword filters (classification stays strict), skipping patents already shown. Unlike the rejected semantic filter (D11), strict results keep their meaning and no similarity cut-off is needed. |
 | Feature-to-evidence mapping | Rejected for Part 1 | Several retrievals per query and complex aggregation, for a workflow not asked for. |
@@ -242,6 +242,23 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Chosen:** Cache each word's stem (`functools.lru_cache` on `stem`).
 - **Result:** 2.0 s, 24 times faster (3,348,406 cache hits, 19,979 misses). The same function serves the filter indexes and keyword parsing, so they benefit too. All tests still pass.
 - **Trade-offs:** Memory for about 20,000 cached words, which is negligible.
+
+## D20. Find patents similar to a given patent ID
+- **Status:** Validated (behaviour and edge cases); relevance not separately measured
+- **Problem:** The brief lists "an entire patent (given by patent ID)" as a possible input. A user who already holds one relevant patent wants its neighbours, without writing a query.
+- **Chosen:** `--similar-to <ID>` (`PatentSearch.search_similar`). The query vector is built from the patent's stored vectors: the mean of its abstract pieces and the mean of its first claim's pieces, each normalised, then averaged with equal weight. It then runs through the normal search, so ranking by best passage, filters, the filtering-method choice and excerpts all work unchanged. The patent itself is excluded from its own results.
+- **Rationale:** The abstract says what the invention is in plain words; the first claim says what is protected. Either alone misses half the picture. Using stored vectors means no model at query time: no 13-second cold start, and a search takes about 4 to 8 ms on the full sample.
+- **Edge cases handled:**
+  - **ID typed in another shape:** case, spaces and punctuation are ignored, and a leading `US` and trailing kind code (`A1`) are stripped, so `US20240051333A1`, `us 2024/0051333 a1` and `20240051333` all work.
+  - **Unknown ID:** a clear message with up to three close IDs from the index, and exit code 2.
+  - **No abstract:** the first claim alone is used; a patent with neither falls back to its description; a patent with no indexed text is refused with a message.
+  - **Filters that match only the source patent:** a specific message ("the filters match only the source patent itself") instead of an empty result, and no suggestions, since no filter change would help.
+  - **A query and `--similar-to` together:** refused; they describe two different searches.
+  - **Identical abstracts:** a patent whose abstract is identical to the source's is kept, usually at the top (0.985 for the twin of 20240116313), and labelled "possibly the same patent family" rather than hidden (D13).
+  - **Suggestions:** when filters match nothing, the commands shown keep `--similar-to`, and "search by meaning" is left out because it would need a text query.
+- **Alternatives:** Use every passage of the patent (one long query, dominated by description paragraphs); score each candidate against all of the source's passages and aggregate (slower, and no clear rule for combining); hide identical-abstract patents (rejected: identical text is not proof of the same family).
+- **Trade-offs:** The first claim is normally the main independent claim, but not always (it can follow cancelled claims). Only the first claim is used, so inventions whose other independent claims cover something different are represented partly.
+- **Validation:** Five unit tests: the source is never returned and no model is loaded; IDs in common shapes resolve and a near miss gives close IDs; filters apply and all four filtering methods agree; filters matching only the source say so; a patent without an abstract uses its claim. Checked by hand on the full sample for the twin, an unknown ID, an exact-title filter matching only the source, a misspelled filter, and a query given together with `--similar-to`.
 
 ## Later experiments (not yet run)
 

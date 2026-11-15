@@ -67,6 +67,11 @@ from:
     + 17 more passages within 0.10 of the best match
 ```
 
+**Similar to a patent:** `--similar-to US20240051333A1` finds the patents closest to one already
+in the dataset, using its abstract and first claim as the query. The patent itself is never
+returned, every filter still applies, and no model is loaded, so it answers in a few
+milliseconds. Patents with the very same abstract are flagged as possibly the same family (D20).
+
 **When filters leave nothing,** the engine says which filter matched nothing and suggests
 changes that would return patents, each with its count and a command to run it: likely
 spellings, near titles, classification codes that exist, "any word" instead of "all words",
@@ -315,9 +320,12 @@ python -m src.cli "wheel rim" --classification B60B --top 5
 python -m src.cli "tire pressure" --title-or-abstract-keywords sensor
 python -m src.cli --exact-title "PNEUMATIC TIRE"
 python -m src.cli "tire pressure" --title-keywords "flat tyre warning"
+python -m src.cli --similar-to US20240051333A1 --classification B60B
 ```
 
-The last one matches nothing and shows the suggestions. With no query, filtered patents are
+The fifth one matches nothing and shows the suggestions. The last one lists patents similar to
+patent 20240051333 within classification B60B; the ID can be typed with or without the `US`
+prefix, kind code, spaces or slashes. With no query, filtered patents are
 listed newest first. `--excerpts N` changes how many passages each result shows, `--full`
 prints them whole, and `python -m src.cli --help` lists every option.
 
@@ -348,8 +356,9 @@ in Search quality exactly.
 python -m pytest tests -q
 ```
 
-41 tests check the cleaning rules (claim numbering, numeral separation, token limits), the
-search (filters and their edge cases, filtering strategies, excerpts, suggestions), the BM25
+46 tests check the cleaning rules (claim numbering, numeral separation, token limits), the
+search (filters and their edge cases, filtering strategies, excerpts, suggestions, similar
+patents), the BM25
 baseline and the self-retrieval ranking, on tiny hand-made indexes. They need neither the model
 nor the dataset.
 
@@ -377,8 +386,8 @@ DECISIONS.md          decision log with evidence
 - Keyword filters match words, not synonyms; "search by meaning" covers that, across all text.
 - Patents are ranked by their single best passage; a patent with many matching passages shows
   a count but doesn't rank higher (D16).
-- Planned next: finding patents similar to a given patent ID, and a choice of ranking
-  (semantic, keyword or combined), backed by the checks above (D18). Deferred: fuzzy title
+- Planned next: a choice of ranking (semantic, keyword or combined), backed by the checks
+  above (D18). Deferred: fuzzy title
   matching, links that open the patent at the matching passage, and a "related by meaning"
   section after strict results (D15).
 
