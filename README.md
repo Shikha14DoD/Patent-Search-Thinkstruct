@@ -124,8 +124,10 @@ results in every case. Embedding the query takes a median of 8.1 ms on top of th
 - **Filtering first only wins when few pieces survive.** Prefilter beat mask at 5–6% of
   pieces and lost from 9.5% upwards: copying thousands of scattered vectors costs more than
   one multi-threaded multiplication over the whole contiguous matrix. So the engine chooses:
-  prefilter at or below 8% of pieces surviving, mask above. A filter therefore never makes
-  search slower than searching everything.
+  prefilter at or below 8% of pieces surviving, mask above. With that choice, a broad filter
+  costs about the same as no filter (2.4 to 3.2 ms against 2.48 ms in this run; an earlier run
+  on the same laptop measured 2.1 to 2.2 ms against 2.26 ms), and a very selective one is
+  faster (2.10 ms at 5% of pieces).
 - **At this size, the query model is the bottleneck,** not the search: embedding takes about
   three times as long as the whole filtered search.
 
@@ -166,8 +168,9 @@ laptop, so exact search would take tens of seconds per query. What would change:
 
 ### 1. Install
 
-Requires Python 3.10 or newer (developed with 3.12 and 3.13) and about 3 GB of disk for
-PyTorch. The first run downloads the model (about 90 MB) from Hugging Face.
+Requires **Python 3.12 or newer** (the pinned NumPy 2.5 needs it) and about 3 GB of disk for
+PyTorch. It has been run on Python 3.12 (Windows 11) and 3.13 (Linux). The first run downloads
+the model (about 90 MB) from Hugging Face.
 
 Windows (PowerShell):
 
