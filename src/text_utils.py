@@ -7,6 +7,7 @@ will not match the index. Keeping it in one module guarantees that.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 import snowballstemmer
 
@@ -29,6 +30,7 @@ SPELLING_VARIANTS = {
 }
 
 
+@lru_cache(maxsize=None)
 def stem(word: str) -> str:
     """Normalise a word so singular and plural forms match.
 
@@ -36,6 +38,8 @@ def stem(word: str) -> str:
     Stems are not always real words ("pressure" -> "pressur"), which is fine:
     they only have to be consistent between the index and the query.
     """
+    # Cached: the corpus has ~80,000 distinct words but millions of word
+    # occurrences, and stemming each occurrence again dominated build time.
     return _STEMMER.stemWord(SPELLING_VARIANTS.get(word, word))
 
 
