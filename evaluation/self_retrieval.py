@@ -42,6 +42,11 @@ sys.path.insert(0, str(HERE.parent))
 
 from src.bm25 import BM25  # noqa: E402
 from src.search import PatentSearch  # noqa: E402
+from src.text_utils import tokenize  # noqa: E402
+
+# A query word counts as distinctive when it is rare in the corpus (BM25 idf
+# above this value), so common words like "tire" or "comprising" are ignored.
+DISTINCTIVE_IDF = 2.0
 
 
 def first_claim_rows(engine: PatentSearch) -> dict[str, int]:
@@ -103,6 +108,19 @@ def rrf(*bests: np.ndarray) -> np.ndarray:
     return np.where(fused > 0, fused, -np.inf)
 
 
+def overlap(engine: PatentSearch, bm25: BM25, query: str, patent_id: str) -> float:
+    """Share of the query's distinctive words found in the patent's non-claim text."""
+    words = {w for w in tokenize(query) if bm25.idf.get(w, 0.0) > DISTINCTIVE_IDF}
+    if not words:
+        return 1.0
+    start, end = engine.unit_rows_of(patent_id)
+    rest: set[str] = set()
+    for row in range(start, end):
+        if engine.units[row]["kind"] != "claim":
+            rest.update(tokenize(engine.units[row]["text"]))
+    return len(words & rest) / len(words)
+
+
 def summarise(ranks: list[int | None]) -> dict[str, float]:
     found = [r for r in ranks if r is not None]
     n = len(ranks)
@@ -132,8 +150,9 @@ def main() -> None:
                                         normalize_embeddings=True).astype(np.float32)
     embed_s = time.perf_counter() - start
 
-    semantic, keyword, hybrid = [], [], []
+    semantic, keyword, hybrid, overlaps = [], [], [], []
     for pid, query, vector in zip(targets, queries, query_vectors):
+        overlaps.append(overlap(engine, bm25, query, pid))
         position = engine.patent_position[pid]
         sem_best = best_per_patent(engine, engine.vectors @ vector, pid)
         kw_best = best_per_patent(engine, bm25.scores(query), pid, zero_is_miss=True)
@@ -149,6 +168,17 @@ def main() -> None:
     bm_better = sum(1 for s, k in zip(semantic, keyword)
                     if (k or 10**6) < (s or 10**6))
 
+    # Split by how much of the claim's distinctive wording the description repeats.
+    full = [i for i, o in enumerate(overlaps) if o >= 1.0]
+    partial = [i for i, o in enumerate(overlaps) if o < 1.0]
+
+    def bucket(indices: list[int]) -> str:
+        cells = []
+        for ranks in (semantic, keyword, hybrid):
+            picked = [ranks[i] for i in indices]
+            cells.append(f"{sum(1 for r in picked if r == 1) / len(picked):.1%}")
+        return " | ".join(cells)
+
     lines = ["# Self-retrieval check: finding a patent from its own claim", "",
              f"Each of {len(targets)} patents was searched with its first claim as the query, "
              "with that patent's claims hidden, so it could only be found through its abstract "
@@ -163,6 +193,13 @@ def main() -> None:
     lines += ["",
               f"Per query, semantic search ranked the patent higher in {sem_better} cases and "
               f"BM25 in {bm_better}; the rest were ties.", "",
+              "## Split by word overlap", "",
+              "How much of the claim's distinctive wording (words rare in the corpus) also "
+              "appears in the same patent's abstract and description. Recall@1 per group:", "",
+              "| Group | Queries | Semantic | BM25 | Combined |",
+              "|---|---:|---:|---:|---:|",
+              f"| Description repeats every distinctive word | {len(full)} | {bucket(full)} |",
+              f"| Some distinctive words missing | {len(partial)} | {bucket(partial)} |", "",
               f"The combined row fuses both rankings with reciprocal rank fusion (k = {RRF_K}, the "
               "standard value, not tuned on this test).", "",
               "This is a proxy: it shows whether the search connects a claim's legal wording to "

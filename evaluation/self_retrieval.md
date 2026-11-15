@@ -10,8 +10,17 @@ Each of 614 patents was searched with its first claim as the query, with that pa
 
 Per query, semantic search ranked the patent higher in 28 cases and BM25 in 257; the rest were ties.
 
+## Split by word overlap
+
+How much of the claim's distinctive wording (words rare in the corpus) also appears in the same patent's abstract and description. Recall@1 per group:
+
+| Group | Queries | Semantic | BM25 | Combined |
+|---|---:|---:|---:|---:|
+| Description repeats every distinctive word | 344 | 58.1% | 96.2% | 79.7% |
+| Some distinctive words missing | 270 | 45.2% | 74.1% | 57.8% |
+
 The combined row fuses both rankings with reciprocal rank fusion (k = 60, the standard value, not tuned on this test).
 
 This is a proxy: it shows whether the search connects a claim's legal wording to the plain description of the same invention, not whether results are relevant prior art. Descriptions often restate claims word for word, which favours BM25.
 
-Query embedding: 614 claims in 35.0 s.
+Query embedding: 614 claims in 31.0 s.
