@@ -288,6 +288,47 @@ def trim_to_tokens(text: str, counter: TokenCounter, budget: int) -> str:
     return " ".join(kept)
 
 
+def parse_record(record: dict, published: str, report: dict | None = None) -> Patent:
+    """Clean one raw patent record. Used by load_patents and by the Part 2 pipeline.
+
+    report, when given, accumulates the cleaning counts that load_patents
+    prints (blank and short paragraphs, cancelled and inferred claims).
+    """
+    report = report if report is not None else {}
+
+    def count(key: str, value: int) -> None:
+        report[key] = report.get(key, 0) + value
+
+    patent_id = str(record.get("doc_number", "")).strip()
+    non_blank = [p for p in record.get("detailed_description") or [] if p and p.strip()]
+    count("blank_paragraphs", len(record.get("detailed_description") or []) - len(non_blank))
+    kept = [(number, p) for number, p in enumerate(non_blank, start=1)
+            if len(p.split()) >= MIN_PARAGRAPH_WORDS]
+    raw_paragraphs = [p for _, p in kept]
+    count("short_paragraphs_skipped", len(non_blank) - len(kept))
+
+    raw_claims = record.get("claims") or []
+    count("cancelled_claim_entries", sum(
+        1 for c in raw_claims
+        if CANCELLED_RE.match(collapse_space(c)) or CANCELLED_ONE_RE.match(collapse_space(c))))
+    claims = parse_claims(raw_claims)
+    count("claims_number_inferred", sum(1 for c in claims if c.number_inferred))
+    count("claims_preamble_missing", sum(1 for c in claims if c.preamble_missing))
+
+    return Patent(
+        patent_id=patent_id,
+        title=collapse_space(record.get("title")),
+        abstract=collapse_space(record.get("abstract")),
+        classification=(record.get("classification") or "").strip(),
+        publication_date=published,
+        url=google_patents_url(record.get("filename", ""), patent_id),
+        claims=claims,
+        paragraphs=[separate_reference_numerals(p) for p in raw_paragraphs],
+        raw_paragraphs=[collapse_space(p) for p in raw_paragraphs],
+        paragraph_numbers=[number for number, _ in kept],
+    )
+
+
 def load_patents(data_dir: str) -> tuple[list[Patent], dict[str, int]]:
     """Read every patents_ipa*.json file in data_dir. Returns (patents, report)."""
     paths = sorted(glob.glob(os.path.join(data_dir, "*.json")))
@@ -319,36 +360,7 @@ def load_patents(data_dir: str) -> tuple[list[Patent], dict[str, int]]:
                 report["skipped_duplicate_id"] += 1
                 continue
             seen.add(patent_id)
-
-            non_blank = [p for p in record.get("detailed_description") or []
-                         if p and p.strip()]
-            report["blank_paragraphs"] += (
-                len(record.get("detailed_description") or []) - len(non_blank))
-            kept = [(number, p) for number, p in enumerate(non_blank, start=1)
-                    if len(p.split()) >= MIN_PARAGRAPH_WORDS]
-            raw_paragraphs = [p for _, p in kept]
-            report["short_paragraphs_skipped"] += len(non_blank) - len(kept)
-
-            raw_claims = record.get("claims") or []
-            report["cancelled_claim_entries"] += sum(
-                1 for c in raw_claims
-                if CANCELLED_RE.match(collapse_space(c)) or CANCELLED_ONE_RE.match(collapse_space(c)))
-            claims = parse_claims(raw_claims)
-            report["claims_number_inferred"] += sum(1 for c in claims if c.number_inferred)
-            report["claims_preamble_missing"] += sum(1 for c in claims if c.preamble_missing)
-
-            patents.append(Patent(
-                patent_id=patent_id,
-                title=collapse_space(record.get("title")),
-                abstract=collapse_space(record.get("abstract")),
-                classification=(record.get("classification") or "").strip(),
-                publication_date=published,
-                url=google_patents_url(record.get("filename", ""), patent_id),
-                claims=claims,
-                paragraphs=[separate_reference_numerals(p) for p in raw_paragraphs],
-                raw_paragraphs=[collapse_space(p) for p in raw_paragraphs],
-                paragraph_numbers=[number for number, _ in kept],
-            ))
+            patents.append(parse_record(record, published, report))
     return patents, report
 
 
