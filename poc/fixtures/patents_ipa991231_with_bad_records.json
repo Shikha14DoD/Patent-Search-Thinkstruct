@@ -1,0 +1,42 @@
+[
+ {
+  "doc_number": "29990000001",
+  "title": "TEST WHEEL FOR THE PROOF OF CONCEPT",
+  "filename": "US29990000001A1-29991231.XML",
+  "classification": "B60B100FI",
+  "abstract": "A test wheel with a rim, a hub and spokes connecting them, used only to check the ingestion pipeline.",
+  "claims": [
+   "1 . A wheel comprising a rim, a hub and a plurality of spokes connecting the rim to the hub.",
+   "2 . The wheel of claim 1 , wherein the spokes are hollow."
+  ],
+  "detailed_description": [
+   "",
+   "The wheel has a rim and a hub joined by twelve spokes made of steel tube.",
+   ""
+  ]
+ },
+ {
+  "doc_number": "",
+  "title": "WHEEL WITHOUT A PATENT NUMBER",
+  "filename": "US29990000001A1-29991231.XML",
+  "classification": "B60B100FI",
+  "abstract": "A test wheel with a rim, a hub and spokes connecting them, used only to check the ingestion pipeline.",
+  "claims": [
+   "1 . A wheel comprising a rim, a hub and a plurality of spokes connecting the rim to the hub.",
+   "2 . The wheel of claim 1 , wherein the spokes are hollow."
+  ],
+  "detailed_description": [
+   "",
+   "The wheel has a rim and a hub joined by twelve spokes made of steel tube.",
+   ""
+  ]
+ },
+ "not a patent record",
+ {
+  "doc_number": "29990000003",
+  "title": "",
+  "abstract": "",
+  "claims": [],
+  "detailed_description": []
+ }
+]
