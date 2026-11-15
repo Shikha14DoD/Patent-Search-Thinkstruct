@@ -425,7 +425,39 @@ one hand-made file with a malformed record.
 5. Process the malformed file: `complete_with_errors`, with the bad record and its reason listed.
 6. Run `status`: jobs by state, patents saved, quarantined records, oldest waiting job.
 
-**Status:** being built. Commands and real output will replace this paragraph once it runs.
+**How to run it:** see [`poc/README.md`](../poc/README.md).
+
+**Result on Part 1's data,** with worker A stopped mid-job (Ctrl+C) and worker B started
+afterwards:
+
+```text
+[B] job 1 attempt 2: patents_ipa240215.json (previous: lease of A expired)
+[B]   → complete (10 saved)
+...
+[B] job 65 attempt 1: patents_ipa991230_corrupt.json
+[B]   → failed: file is not valid JSON: Unterminated string starting at: line 1 column 41 (char 40)
+[B] job 66 attempt 1: patents_ipa991231_with_bad_records.json
+[B]   → complete_with_errors (1 saved, 3 quarantined)
+
+$ python -m poc.status
+JOBS      66 total · queued 0 · processing 0 · retry_wait 0 · complete 64 · complete_with_errors 1 · failed 1
+          oldest unfinished: none · needed more than one attempt: 1
+RECORDS   644 read · saved 641 · unchanged 0 · conflict 0 · quarantined 3
+PATENTS   641 unique · 0 conflicting versions · 32146 passages
+```
+
+Job 1 was finished by B on its second attempt, and the patent count is the same as in a run
+without the crash: nothing was lost or stored twice. Registering the same 66 files again created
+no new jobs.
+
+Ten tests in `tests/test_poc.py` check every guarantee, including the ones not shown above: a job
+locked by one worker is skipped by another, a temporary error is retried and the job fails after
+its last attempt, the same patent arriving again is `unchanged` while different content under the
+same ID is a `conflict`, a lease expiring on the final attempt fails the job, and a stale worker
+can't finish a job it lost.
+
+**Passages** here are counted before splitting to the model's token limit (abstract + claims +
+description paragraphs), so the figure differs from Part 1's 34,551 units.
 
 ## References
 

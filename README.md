@@ -8,7 +8,8 @@ filters on classification, title and abstract.
 specific to vehicles: classification codes and vocabulary come from the data.
 
 Built as a take-home project for Thinkstruct. Every design choice, with the evidence behind
-it, is in [`DECISIONS.md`](DECISIONS.md).
+it, is in [`DECISIONS.md`](DECISIONS.md). The design for 10 million patents and its proof of
+concept are in [Part 2](#part-2-10-million-patents).
 
 ## Problem statement
 
@@ -238,28 +239,13 @@ takes about 10 to 11 ms end to end. Starting the CLI adds a one-off 13 s to load
 - **An embedding cache** keyed by model and exact text: after a cleaning change, a rebuild
   re-embeds only the changed pieces, about 5 minutes instead of 20 (D10).
 
-### What I would use at large scale
+### What changes at large scale
 
-As an illustrative scenario, not a capacity plan: if 10 million patents split like this sample
-(about 54 pieces each), the same design would mean about 540 million vectors, roughly 830 GB as
-384-dimensional float32 before any index structures or copies. As an order of magnitude,
-scoring took about 54 ms per million vectors on this laptop, so exact search at that size would
-take tens of seconds per query. What would change (designed in Part 2):
-
-- **Approximate nearest-neighbour search** (HNSW or IVF with product quantization) with
-  filter-aware search. Compressing each vector to a 64-byte code would bring the 830 GB to
-  about 35 GB.
-- **An index partitioned by classification,** so a classification filter skips whole
-  partitions instead of copying vectors. That turns filtering into a real speed-up, which it
-  can't be at this size. Queries without a classification filter still search every partition.
-- **Keyword filters in a search engine or database index** (OpenSearch, or Postgres with GIN
-  indexes) and metadata in a database, instead of in-memory dictionaries and a 44 MB pickle
-  loaded at start-up.
-- **Faster embedding.** The laptop embeds 20 to 29 pieces per second, so embedding 540 million
-  pieces this way would take months. Ingestion needs GPUs and parallel workers, and only new
-  patents should be embedded each week.
-- **A warm query service** that keeps the model loaded and caches embeddings of repeated
-  queries, since query embedding dominates latency already.
+At 10 million patents the same design means about 540 million passages and 830 GB of vectors,
+and exact search would take tens of seconds per query. Part 2 designs the system for that size:
+OpenSearch for keyword search, compressed vector search and filters in one engine; PostgreSQL to
+track every file and patent through ingestion; GPU workers for the one-off embedding. See
+[Part 2](#part-2-10-million-patents).
 
 ## How to run Part 1
 
@@ -356,11 +342,34 @@ in Search quality exactly.
 python -m pytest tests -q
 ```
 
-46 tests check the cleaning rules (claim numbering, numeral separation, token limits), the
+56 tests. 46 check the cleaning rules (claim numbering, numeral separation, token limits), the
 search (filters and their edge cases, filtering strategies, excerpts, suggestions, similar
-patents), the BM25
-baseline and the self-retrieval ranking, on tiny hand-made indexes. They need neither the model
-nor the dataset.
+patents), the BM25 baseline and the self-retrieval ranking, on tiny hand-made indexes; they need
+neither the model nor the dataset. The other 10 test the Part 2 proof of concept and need
+PostgreSQL running (`docker compose up -d`); without it they are skipped.
+
+## Part 2: 10 million patents
+
+**Design:** [`docs/PART2_DESIGN.md`](docs/PART2_DESIGN.md): the architecture, the search and
+ingestion pipelines, failure handling, status tracking, a cost breakdown (about $7,400 a month in
+an illustrative AWS scenario, with every input shown), the main challenges, and a build order.
+
+**Proof of concept:** [`poc/`](poc/README.md): the ingestion pipeline, run on this project's 64
+weekly files with PostgreSQL in Docker. It shows jobs claimed safely by several workers, a crashed
+worker's job taken over once its lease expires, temporary errors retried, the same file or patent
+never stored twice, bad records quarantined with their reason, and a `status` command.
+
+```
+docker compose up -d
+python -m poc.db reset
+python -m poc.register data/patent_data_small poc/fixtures
+python -m poc.worker
+python -m poc.status
+```
+
+Expected: 64 jobs `complete`, the deliberately corrupt file `failed`, the file with bad records
+`complete_with_errors` with 3 records quarantined, and 641 unique patents. Step-by-step
+demonstrations of each guarantee are in [`poc/README.md`](poc/README.md).
 
 ## Repository layout
 
@@ -375,6 +384,9 @@ benchmarks/timing.py  filters-on vs filters-off benchmark
 evaluation/self_retrieval.py   automated search-quality check
 tests/                unit tests
 DECISIONS.md          decision log with evidence
+docs/PART2_DESIGN.md  Part 2: design for 10 million patents
+poc/                  Part 2: ingestion proof of concept (register, worker, status)
+docker-compose.yml    PostgreSQL for the proof of concept
 ```
 
 ## Limitations
