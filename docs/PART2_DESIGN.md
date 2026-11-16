@@ -107,9 +107,16 @@ This layout gives Part 1's behaviour directly:
   vector search, so the title, abstract and classification don't have to be copied onto 54
   passages each.
 
-Alternative: one document per passage, with the patent fields copied onto each. It is simpler to
-index, but the API must group passages by patent and copy every patent field 54 times. Recorded
-as the fallback if nested search under-performs in the pilot (see section 9).
+**What this layout costs.** OpenSearch stores a patent and its nested passages as one block, so
+changing any passage rewrites the whole patent: all its passages and their vectors. That is cheap
+here because patents are written once: a new publication is a new document, and a model change
+builds a new index anyway (section 6). Large patents with hundreds of passages make bigger, uneven
+writes, which the ingestion workers absorb by batching.
+
+**When one document per passage is better** (patent fields copied onto each passage, and the API
+groups results by patent): if passages are updated one at a time (per-passage annotations or
+partial re-embedding), if very large patents make writes or merges slow, or if the pilot shows
+nested search returning too few results with filters (see 4.5). It is kept as the fallback.
 
 ### 4.3 What gets embedded: every passage, compressed
 
@@ -168,6 +175,15 @@ For `"adaptive battery cooling"` with classification prefix `H01M`:
 6. If the filters match nothing, return an empty result with Part 1's suggestions. Filters are
    never loosened silently.
 
+**Why merge both when Part 1 defaults to semantic search?** Part 1 kept semantic search as its
+default because its main input is a plain-language description, where Part 1's paraphrase test
+favoured it. A production system also gets the other kind of query: attorneys paste claim
+language, where BM25 found the right patent first 86.5% of the time against 52.4%. Merging was never
+far from the better method in either test, so it is the safest single default while the query mix
+is unknown. It stays provisional: a judged relevance test split by query type decides. If semantic
+search wins on descriptions and BM25 on claims, the API should route by query type instead of
+merging; if merging loses to semantic search overall, it is dropped.
+
 **Similar to a patent ID** looks up that patent's stored abstract and first-claim vectors and runs
 step 3 with the patent excluded, as in Part 1, with no model needed. **Exact title or ID lookups**
 are plain filter queries.
@@ -179,6 +195,13 @@ are plain filter queries.
 - **RRF is untested at scale.** Both lists are kept and logged so the merge can be replaced.
 - **The model is general-purpose.** Part 1 showed it is weaker than BM25 when the wording matches.
   A model change means re-embedding everything (section 6).
+- **The four OpenSearch features are untested together.** Nested vector fields, disk-based
+  compression, filters on patent-level fields inside a nested vector search, and `inner_hits` are
+  each documented, but not verified in combination here. A bug report against OpenSearch 2.17.1
+  describes nested vector searches with filters returning fewer results than they should. **First
+  pilot task:** index about 20 known patents on the chosen version and check that filters stay
+  strict, each patent is ranked by its best passage, `inner_hits` returns the right passages, and
+  the results match exact search. If any check fails, use one document per passage (4.2).
 
 ## 5. Ingestion pipeline
 
@@ -366,9 +389,20 @@ abstracts only needs 69 GB of k-NN memory and 3.5 TB of disk (3 data nodes, the 
 the keyword index), about **$4,770**; three passages per patent needs 2.5 TB of disk on the same
 3 nodes, about **$4,630**.
 
-**Sensitivity:** one more data node adds ~$980 a month; 1 TB more disk adds $122. If the keyword
-index expands 6× instead of 3×, disk grows by 750 GB per copy. Nothing here shows that 5 nodes meet
-the latency goal; the pilot must measure that.
+**Sensitivity.** The 5 nodes run at 87% of their vector-memory allowance, which leaves little room
+for growth or uneven shards, and every input below is an assumption or an extrapolation from 640
+patents. Each change, on its own:
+
+| If… | Effect | Extra per month (before contingency) |
+|---|---|---:|
+| Memory is kept at 70% use instead of 87% (more headroom) | 7 data nodes | ~$1,960 |
+| Patents average 80 passages instead of 54 | 310 GB of vector memory: 7 nodes, 8 TB disk | ~$2,200 |
+| Two replicas instead of one (higher availability) | 314 GB of vector memory: 7 nodes, 8 TB disk | ~$2,200 |
+| The keyword index expands 6× instead of 3× | 8 TB disk (vector memory unchanged) | ~$240 |
+
+The figure most likely to move is passages per patent, because a sample of 640 vehicle patents
+may not represent the whole corpus; the pilot measures it first. **Nothing here shows that 5 nodes
+meet the latency goal**: the cluster is a costed starting point, not a validated configuration.
 
 ### 8.3 One-off backfill
 
@@ -388,7 +422,7 @@ expires and another worker takes the job.
 | **Data quality at scale** | Part 1's problems (lost claim numbers, empty paragraphs, text over the token limit) will appear across the corpus, so the cleaning rules run in the workers and their counts are reported per job |
 | **Re-embedding after a model change** | Versioned indexes avoid downtime and the embedding cache skips unchanged text, but a new model still means re-embedding all 540 million passages |
 
-**Pilot before buying:** index about 1% of the corpus (100,000 patents) and measure index size per
+**Pilot before buying:** index about 1% of the corpus (100,000 patents) and measure passages and index size per
 patent, k-NN memory, nested-search behaviour with filters, recall against exact search, and p95 under
 concurrent load.
 
