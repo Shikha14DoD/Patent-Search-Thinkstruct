@@ -113,6 +113,14 @@ here because patents are written once: a new publication is a new document, and 
 builds a new index anyway (section 6). Large patents with hundreds of passages make bigger, uneven
 writes, which the ingestion workers absorb by batching.
 
+**A hard limit:** OpenSearch allows at most 10,000 nested objects per document by default
+(`index.mapping.nested_objects.limit`). Part 1's sample is far below it (median 46 passages per
+patent, 99th percentile 233, largest 362), but a very long patent elsewhere could exceed it. The
+worker checks the passage count before writing: a patent over the limit is split into several
+documents of up to 5,000 passages, each carrying the patent fields and a part number, and the API
+keeps only each patent's best-scoring part. The split is counted in the job's status, so no passage
+is dropped silently and no write fails.
+
 **When one document per passage is better** (patent fields copied onto each passage, and the API
 groups results by patent): if passages are updated one at a time (per-passage annotations or
 partial re-embedding), if very large patents make writes or merges slow, or if the pilot shows
@@ -236,22 +244,23 @@ CREATE TABLE ingestion_jobs (
 );
 
 CREATE TABLE publication_versions (
-  publication_id   text NOT NULL,        -- e.g. 20240051333
+  jurisdiction     text NOT NULL,        -- US, EP, WO, ...
+  publication_number text NOT NULL,      -- e.g. 20240051333
+  kind_code        text NOT NULL,        -- A1 application, A9 corrected, B1/B2 grant
   content_hash     text NOT NULL,        -- sha256 of the cleaned record
-  jurisdiction     text NOT NULL DEFAULT 'US',
   language         text NOT NULL DEFAULT 'unknown',
   title text, classification text, publication_date date,
   passages         int,
   job_id           bigint REFERENCES ingestion_jobs(id),
   state            text NOT NULL,        -- saved | indexed | conflict
   indexed_in       text,                 -- index version it is searchable in
-  PRIMARY KEY (publication_id, content_hash)
+  PRIMARY KEY (jurisdiction, publication_number, kind_code, content_hash)
 );
 
 CREATE TABLE source_records (
   job_id           bigint REFERENCES ingestion_jobs(id),
   record_position  int NOT NULL,         -- position of the record in the file
-  publication_id   text,
+  publication_id   text,                 -- e.g. US20240051333A1, when the record has one
   outcome          text NOT NULL,        -- saved | unchanged | quarantined | conflict
   error_reason     text,
   PRIMARY KEY (job_id, record_position)
@@ -285,15 +294,25 @@ success.
 - **Retries** wait longer each time (for example 1, 4, then 16 minutes); after the last attempt
   the job becomes `failed`.
 
-### 5.5 Three different duplicate problems
+### 5.5 Patent identity
+
+A publication is identified by **jurisdiction + publication number + kind code**, for example
+`US` `20240051333` `A1`. The number alone is not enough: a corrected publication (kind `A9`) or a
+later grant (`B1`, `B2`) can reuse the number but is a different document, and must not be mistaken
+for a duplicate of the original or overwrite it. Part 1's sample already contains 4 `A9` corrections
+among 640 publications. Within one identity, the **content hash** separates genuine revisions from
+exact repeats. Related publications (an application and its correction or grant) are linked by
+jurisdiction and number, so a search can show them together.
+
+### 5.6 Three different duplicate problems
 
 | Problem | Protection |
 |---|---|
 | The same file registered twice | `UNIQUE (source_key, checksum, pipeline_version)`: the second registration finds the existing job |
-| A retry after a crash writes the same patents again | Writes are upserts keyed by `(publication_id, content_hash)` in Postgres and by publication ID in OpenSearch, so writing twice changes nothing |
-| The same patent ID arrives with different content | Both versions are kept with different hashes, the newer is marked `conflict`, and it waits for a rule or a person. Nothing is overwritten silently |
+| A retry after a crash writes the same patents again | Writes are upserts keyed by identity + content hash in Postgres and by identity in OpenSearch, so writing twice changes nothing |
+| The same identity arrives with different content | Both versions are kept with different hashes, the newer is marked `conflict`, and it waits for a rule or a person. Nothing is overwritten silently. A different kind code is a different publication, not a conflict |
 
-### 5.6 What can go wrong
+### 5.7 What can go wrong
 
 | Failure | Detected by | Response | Visible as |
 |---|---|---|---|
@@ -397,12 +416,18 @@ patents. Each change, on its own:
 |---|---|---:|
 | Memory is kept at 70% use instead of 87% (more headroom) | 7 data nodes | ~$1,960 |
 | Patents average 80 passages instead of 54 | 310 GB of vector memory: 7 nodes, 8 TB disk | ~$2,200 |
+| Patents average 140 passages instead of 54 (a corpus of much longer patents) | 1.4 billion passages, 542 GB of vector memory: 12 nodes, 14 TB disk | ~$7,800 |
 | Two replicas instead of one (higher availability) | 314 GB of vector memory: 7 nodes, 8 TB disk | ~$2,200 |
 | The keyword index expands 6× instead of 3× | 8 TB disk (vector memory unchanged) | ~$240 |
 
 The figure most likely to move is passages per patent, because a sample of 640 vehicle patents
-may not represent the whole corpus; the pilot measures it first. **Nothing here shows that 5 nodes
-meet the latency goal**: the cluster is a costed starting point, not a validated configuration.
+may not represent the whole corpus: in the sample, 1 patent in 10 already has 102 or more
+passages, and fields such as chemistry and biotechnology tend to have longer descriptions. Cost
+grows almost in proportion to it: at 140 passages per patent the total is about **$16,400 a month**,
+more than double the base case. The ~$7,370 is therefore an illustration of the method at the
+sample's average, not the expected bill; the pilot measures passages per patent first. **Nothing
+here shows that 5 nodes meet the latency goal**: the cluster is a costed starting point, not a
+validated configuration.
 
 ### 8.3 One-off backfill
 
@@ -489,6 +514,11 @@ locked by one worker is skipped by another, a temporary error is retried and the
 its last attempt, the same patent arriving again is `unchanged` while different content under the
 same ID is a `conflict`, a lease expiring on the final attempt fails the job, and a stale worker
 can't finish a job it lost.
+
+**Patent identity in the PoC:** the PoC keys patents by publication number and content hash, which
+is unique in Part 1's sample (its 4 `A9` corrections don't share a number with any `A1`). A
+correction that did share a number would be stored as a `conflict`, kept and flagged, never merged or
+overwritten; production adds jurisdiction and kind code to the key (section 5.5).
 
 **Passages** here are counted before splitting to the model's token limit (abstract + claims +
 description paragraphs), so the figure differs from Part 1's 34,551 units.
