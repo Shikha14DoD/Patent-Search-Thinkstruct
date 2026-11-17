@@ -7,13 +7,32 @@ filters on classification, title and abstract.
 couplings), published February 2024 to May 2025. Nothing in the engine is specific to vehicles:
 the classification codes and vocabulary come from the data.
 
-Built as a take-home project for Thinkstruct. This page summarises the three parts; each links
+Built for Thinkstruct's patent search engine assignment. This page summarises the three parts; each links
 to its full write-up:
 
 - [Part 1](docs/PART1.md): the search engine and its filters.
 - [Part 2](docs/PART2.md): how the system would scale to 10 million patents, plus a working
   proof of concept of the ingestion pipeline.
 - [Part 3](docs/PART3.md): speed measurements and improvements on the large dataset.
+
+**How to run this project**
+
+1. **Install.** You need Python 3.12 or newer. Create a virtual environment and install the
+   packages with `pip install -r requirements.txt` (exact commands in [How to run](#how-to-run)).
+2. **Add the data.** The patent data supplied with the assignment is not in this repository, so
+   copy it in yourself: the 64 weekly JSON files go in `data/patent_data_small/` (Parts 1 and 2),
+   and the large dataset goes in `data/patent_data_large/` (Part 3 only).
+3. **Run the part you want to look at.** Each part has its own step-by-step instructions, with
+   the output to expect:
+   - **Part 1, search:** build the index (about 20 minutes), then search from the command line or
+     the browser page. Steps: [How to run Part 1](docs/PART1.md#how-to-run-part-1).
+   - **Part 2, proof of concept:** needs Docker for PostgreSQL. Steps:
+     [Part 2 page](docs/PART2.md) (short version) and
+     [poc/README.md, "Run it"](poc/README.md#run-it) (each guarantee shown one by one).
+   - **Part 3, speed on the large dataset:** builds a larger index, then runs the benchmarks.
+     Steps: [How to run Part 3](docs/PART3.md#how-to-run-part-3).
+
+All three sets of commands are also collected in one place under [How to run](#how-to-run) below.
 
 Every design choice, with the evidence behind it, is in [`DECISIONS.md`](DECISIONS.md), a log of
 numbered decisions (D1, D2, …). Where this page cites one, it also states the reason in plain
