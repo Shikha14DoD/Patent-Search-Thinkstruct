@@ -1,0 +1,69 @@
+{
+  "passages": 1000,
+  "cpu_count": 8,
+  "results": [
+    {
+      "variant": "torch-b64 (Part 1)",
+      "seconds": 56.8,
+      "passages_per_s": 17.6,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.0
+    },
+    {
+      "variant": "torch-b16",
+      "seconds": 40.1,
+      "passages_per_s": 24.9,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.41
+    },
+    {
+      "variant": "torch-b32",
+      "seconds": 41.4,
+      "passages_per_s": 24.1,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.37
+    },
+    {
+      "variant": "torch-b128",
+      "seconds": 51.5,
+      "passages_per_s": 19.4,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.1
+    },
+    {
+      "variant": "onnx-fp32",
+      "seconds": 48.1,
+      "passages_per_s": 20.8,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.18
+    },
+    {
+      "variant": "onnx-optimised",
+      "seconds": 53.6,
+      "passages_per_s": 18.7,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.06
+    },
+    {
+      "variant": "onnx-int8",
+      "seconds": 43.9,
+      "passages_per_s": 22.8,
+      "cosine_mean": 0.9907,
+      "cosine_min": 0.9565,
+      "top10_same": 8.4,
+      "speedup": 1.3
+    }
+  ]
+}

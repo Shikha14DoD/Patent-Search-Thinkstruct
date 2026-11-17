@@ -1,0 +1,69 @@
+{
+  "passages": 1000,
+  "cpu_count": 8,
+  "results": [
+    {
+      "variant": "torch-b64 (Part 1)",
+      "seconds": 42.8,
+      "passages_per_s": 23.4,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.0
+    },
+    {
+      "variant": "torch-b8",
+      "seconds": 33.3,
+      "passages_per_s": 30.0,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.28
+    },
+    {
+      "variant": "torch-b16",
+      "seconds": 33.0,
+      "passages_per_s": 30.3,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.29
+    },
+    {
+      "variant": "onnx-fp32-b8",
+      "seconds": 35.6,
+      "passages_per_s": 28.1,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.2
+    },
+    {
+      "variant": "onnx-fp32-b16",
+      "seconds": 36.3,
+      "passages_per_s": 27.6,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.18
+    },
+    {
+      "variant": "onnx-fp32-b32",
+      "seconds": 39.6,
+      "passages_per_s": 25.3,
+      "cosine_mean": 1.0,
+      "cosine_min": 1.0,
+      "top10_same": 10.0,
+      "speedup": 1.08
+    },
+    {
+      "variant": "onnx-int8-b16",
+      "seconds": 37.2,
+      "passages_per_s": 26.9,
+      "cosine_mean": 0.9909,
+      "cosine_min": 0.959,
+      "top10_same": 8.6,
+      "speedup": 1.15
+    }
+  ]
+}
