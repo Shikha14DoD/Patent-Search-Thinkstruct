@@ -327,9 +327,14 @@ jurisdiction and number, so a search can show them together.
 
 - **Weekly batches** are added to the live index. Postgres distinguishes *saved* from *indexed*,
   so a patent counts as searchable only after its write is confirmed.
-- **A new model or cleaning rule** means a new index version, built next to the live one. It is
-  checked (counts, sample queries, the Part 1 evaluation), then an alias switches searches to it
-  with no downtime. The old version is kept until the new one is trusted.
+- **A new embedding model means new vectors for every passage.** Vectors from different models
+  can't be compared, so nothing can be reused: every passage is embedded again (the embedding
+  cache is keyed by model as well as text, so it can't help), at the backfill's cost (section 8.3).
+  A new cleaning rule re-embeds only the passages whose text changed.
+- **Either way, a new index version is built next to the live one.** It is checked (counts, sample
+  queries, the Part 1 evaluation), then an alias switches searches to it with no downtime. Both
+  versions are held until the new one is trusted, so the cluster needs room for two indexes for a
+  while.
 - **Every response records** the index, model and ranking versions, so a past result can be
   explained. Replaying an old search exactly also needs the old index to be kept, which is a
   retention decision.
@@ -420,6 +425,11 @@ patents. Each change, on its own:
 | Two replicas instead of one (higher availability) | 314 GB of vector memory: 7 nodes, 8 TB disk | ~$2,200 |
 | The keyword index expands 6× instead of 3× | 8 TB disk (vector memory unchanged) | ~$240 |
 
+**Measured since (Part 3):** the large dataset averages **147 passages per patent**. Sized the same
+way (1.47 billion passages, 569 GB of vector memory with a replica: 12 data nodes, 15 TB of disk),
+the monthly total is **about $16,500**, close to the 140-passage row above. That is the realistic
+figure; $7,370 shows the method at the small sample's average.
+
 The figure most likely to move is passages per patent, because a sample of 640 vehicle patents
 may not represent the whole corpus: in the sample, 1 patent in 10 already has 102 or more
 passages, and fields such as chemistry and biotechnology tend to have longer descriptions. Cost
@@ -429,13 +439,25 @@ sample's average, not the expected bill; the pilot measures passages per patent 
 here shows that 5 nodes meet the latency goal**: the cluster is a costed starting point, not a
 validated configuration.
 
-### 8.3 One-off backfill
+### 8.3 One-off backfill, and the same cost again for every model change
 
-`540M passages ÷ (passages per second per GPU × GPUs) ÷ 3,600 × price per GPU-hour`, plus bulk
-indexing time. GPU throughput for this model hasn't been measured here, so no dollar figure is
-claimed. As an illustration of the formula only: at 2,000 passages a second per GPU, the backfill is
-75 GPU-hours. Spot GPUs suit it because a reclaimed machine is just a crashed worker: its lease
-expires and another worker takes the job.
+`passages ÷ (passages per second per GPU) ÷ 3,600 × price per GPU-hour`, plus bulk indexing time.
+
+GPU throughput for this model on these passages hasn't been measured, so the estimate is a range.
+Part 3 measured about 35 passages a second on a laptop CPU; GPUs are commonly 10–50× faster, so this
+assumes 500–3,000 passages a second on one NVIDIA T4 (`g4dn.xlarge`: $0.526/hour on-demand, about
+$0.23/hour as a spot instance, us-east-1).
+
+| Passages | GPU-hours | Spot cost | On-demand cost |
+|---|---:|---:|---:|
+| 540 million (54 per patent, this design's base) | 50–300 | ~$11–69 | ~$26–158 |
+| 1.47 billion (147 per patent, measured in Part 3) | 136–817 | ~$31–188 | ~$72–430 |
+
+**The embedding itself is cheap:** even the high end is less than a day of the search cluster. The
+real costs of a backfill are the cluster time while 1.47 billion vectors are bulk-indexed, and, for a
+model change, holding two index versions at once. Spot GPUs suit the work because a reclaimed
+machine is just a crashed worker: its lease expires and another worker takes the job. The pilot
+measures the real throughput first.
 
 ## 9. Major challenges
 
