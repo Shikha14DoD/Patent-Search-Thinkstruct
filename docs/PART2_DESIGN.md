@@ -545,6 +545,47 @@ overwritten; production adds jurisdiction and kind code to the key (section 5.5)
 **Passages** here are counted before splitting to the model's token limit (abstract + claims +
 description paragraphs), so the figure differs from Part 1's 34,551 units.
 
+## 12. Future scope: other countries and languages
+
+Today's scope is US English publications (section 1). This is the plan for widening it. It is a
+plan, not something I measured, and each step below says what to test before adopting it.
+
+**1. Each patent office publishes on its own day, so ingestion becomes per source.**
+The European Patent Office publishes every Wednesday; the weekly US files in this data are dated
+Thursdays. Other offices keep their own schedules. With several sources, something new arrives
+on most days of the week, so the weekly build becomes a daily check: one job per source per
+publication day, embedding only the new passages and adding them to the live index (section 6).
+The job queue in section 5 already treats each batch as an independent job, so a new source is a
+new job type with its own parser, not a new pipeline. The 24-hour freshness target in section 1
+still applies, measured from the day each office publishes.
+
+**2. Record the country and language on every patent.** The `jurisdiction` and `language`
+fields (section 4.2) get real values, and country and language filters sit beside the existing
+ones. Publication dates stay per office, so a date filter can still say "published", never "filed".
+
+**3. Language: three options, tested in this order.**
+
+| Option | How it works | Cost and risk |
+|---|---|---|
+| **Multilingual embedding model** | One model puts text from different languages in the same space, so an English query can find a German claim. One index, original text kept as evidence | Every passage is embedded again (the same cost as section 8.3 gives for any model change). Quality is unknown until tested |
+| **Translate to English when ingesting** | Keep the original text for evidence and search an English copy | Translation cost and errors in technical terms; the evidence shown is no longer the searched text |
+| **Separate index per language** | Each language gets its own keyword analyser and model | Simple to reason about, but cross-language search needs merging results from several indexes |
+
+I would test the first option on a small sample before buying anything: embed a few thousand
+patents in two languages with a multilingual model, then run Part 1's checks (find a patent from
+its own claim, then a human-judged set of everyday-language queries) and compare with the current
+English-only model. Keyword ranking also needs a per-language analyser, because BM25 depends on
+splitting text into words correctly, which differs by language.
+
+**4. The same invention is filed in many countries.** Results would fill with near-copies of one
+invention (a patent family). Part 1 already flags identical abstracts (decision D20), and section
+5.5 keeps each publication as its own document. Across countries I would group documents by
+family identifier when the source provides one, show one entry per family, and list the other
+countries beside it. Whether grouping helps recall or hurts it is another thing to measure.
+
+**5. What I would not do first:** translate everything up front, or index every office at once.
+Start with one second office and one second language, measure, then widen.
+
 ## References
 
 - [PostgreSQL: `SELECT … FOR UPDATE SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html)
