@@ -29,6 +29,7 @@ from dataclasses import asdict
 import numpy as np
 
 from .load_data import MAX_MODEL_TOKENS, load_corpus
+from .search import HNSW_FILE
 from .text_utils import normalize_title, tokenize
 
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -113,8 +114,15 @@ class EmbeddingCache:
 
 
 def embed_units(texts: list[str], model_name: str, cache: EmbeddingCache,
-                batch_size: int) -> tuple[np.ndarray, dict]:
-    """Return one vector per text, embedding only what the cache lacks."""
+                batch_size: int, workers: int = 1) -> tuple[np.ndarray, dict]:
+    """Return one vector per text, embedding only what the cache lacks.
+
+    workers > 1 splits each chunk of texts across that many processes, each
+    limited to one CPU thread, instead of one process using several threads.
+    For a model this small, one process's threads share the work poorly, so
+    separate processes may use the cores better; results are the same vectors
+    (benchmarks/large/build_ab_workers.json).
+    """
     keys = [text_key(model_name, text) for text in texts]
     missing: dict[str, str] = {}
     for key, text in zip(keys, texts):
@@ -129,6 +137,12 @@ def embed_units(texts: list[str], model_name: str, cache: EmbeddingCache,
 
         start = time.perf_counter()
         model = SentenceTransformer(model_name)
+        pool = None
+        if workers > 1:
+            # Each worker process reads these when it starts and uses one thread.
+            for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+                os.environ[variable] = "1"
+            pool = model.start_multi_process_pool(target_devices=["cpu"] * workers)
         stats["model_load_s"] = time.perf_counter() - start
         print(f"model loaded in {stats['model_load_s']:.1f}s; "
               f"embedding {len(missing)} new texts "
@@ -146,6 +160,7 @@ def embed_units(texts: list[str], model_name: str, cache: EmbeddingCache,
                 convert_to_numpy=True,
                 normalize_embeddings=True,  # cosine similarity becomes a dot product
                 show_progress_bar=False,
+                pool=pool,
             ).astype(np.float32)
             cache.add([key for key, _ in part], vectors)
             done = begin + len(part)
@@ -153,10 +168,31 @@ def embed_units(texts: list[str], model_name: str, cache: EmbeddingCache,
             print(f"  embedded {done}/{len(todo)} "
                   f"({done / elapsed:.0f} texts/s, {elapsed:.0f}s elapsed)", flush=True)
         stats["embed_s"] = time.perf_counter() - start
+        if pool is not None:
+            model.stop_multi_process_pool(pool)
     else:
         print(f"all {stats['distinct_texts']} distinct texts found in the cache")
 
     return np.vstack([cache.get(key) for key in keys]).astype(np.float32), stats
+
+
+# -- approximate search -----------------------------------------------------
+# Below this size exact search takes a few milliseconds and needs no graph, so
+# Part 1's 34,551-passage index stays exact; 75,018 passages measured 5.6x
+# faster with the graph and the same top 10 (benchmarks/large/search.json).
+HNSW_MIN_VECTORS = 50_000
+HNSW_M = 32                 # links per node
+HNSW_EF_CONSTRUCTION = 128  # search width while building
+
+
+def build_hnsw(vectors: np.ndarray, path: str) -> None:
+    """Write an HNSW graph over the vectors (inner product = cosine: they are normalised)."""
+    import faiss
+
+    graph = faiss.IndexHNSWFlat(vectors.shape[1], HNSW_M, faiss.METRIC_INNER_PRODUCT)
+    graph.hnsw.efConstruction = HNSW_EF_CONSTRUCTION
+    graph.add(np.ascontiguousarray(vectors, dtype=np.float32))
+    faiss.write_index(graph, path)
 
 
 # -- filter indexes ---------------------------------------------------------
@@ -242,13 +278,25 @@ def assemble_bundle(patents, units, model_name: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the patent search index.")
-    parser.add_argument("--data", default="data/patent_data_small",
-                        help="Folder holding the patents_ipa*.json files")
+    parser.add_argument("--data", nargs="+", default=["data/patent_data_small"],
+                        help="Folder(s) of patent .json files; 'folder:N' takes a "
+                             "spread-out sample of N patents, e.g. data/patent_data_large:300")
     parser.add_argument("--out", default="index", help="Folder to write the index into")
     parser.add_argument("--cache", default="embedding_cache",
                         help="Folder for the embedding cache")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    # 64, as in Part 1. A micro-benchmark on 1,000 passages in random order made
+    # batch 16 look 1.3-1.4x faster (benchmarks/large/embed_speed.json), but in a
+    # real build it was no faster (benchmarks/large/build_ab_batch.json): the build sorts
+    # every passage by length first, so batches hold near-equal lengths and there
+    # is almost no padding for a smaller batch to save.
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Embedding processes, one CPU thread each (1 = one process, "
+                             "all threads)")
+    parser.add_argument("--hnsw", choices=["auto", "yes", "no"], default="auto",
+                        help="Build an HNSW graph for approximate search; auto = only "
+                             f"for {HNSW_MIN_VECTORS:,} vectors or more")
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -274,7 +322,7 @@ def main() -> None:
         print(f"seeded the embedding cache with {seeded} vectors from the existing index")
 
     vectors, embed_stats = embed_units([unit.text for unit in units], args.model,
-                                       cache, args.batch_size)
+                                       cache, args.batch_size, args.workers)
     timings["model_load_s"] = embed_stats.pop("model_load_s")
     timings["embed_s"] = embed_stats.pop("embed_s")
     print(f"{len(units)} unit vectors ready ({vectors.nbytes / 1e6:.0f} MB)")
@@ -289,6 +337,16 @@ def main() -> None:
     print(f"filter indexes built in {timings['filter_indexes_s']:.1f}s")
 
     np.save(os.path.join(args.out, "vectors.npy"), vectors)
+
+    # --- approximate search graph ------------------------------------------
+    graph_path = os.path.join(args.out, HNSW_FILE)
+    if args.hnsw == "yes" or (args.hnsw == "auto" and len(vectors) >= HNSW_MIN_VECTORS):
+        start = time.perf_counter()
+        build_hnsw(vectors, graph_path)
+        timings["hnsw_s"] = time.perf_counter() - start
+        print(f"HNSW graph built in {timings['hnsw_s']:.1f}s")
+    elif os.path.exists(graph_path):
+        os.remove(graph_path)   # a graph from an earlier build would no longer match
     with open(os.path.join(args.out, "index.pkl"), "wb") as handle:
         pickle.dump(bundle, handle, protocol=pickle.HIGHEST_PROTOCOL)
 

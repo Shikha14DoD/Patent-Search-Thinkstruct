@@ -17,12 +17,20 @@ return the same results; only the work done differs.
   postfilter  The naive version: score and rank everything, then walk down
               the ranking checking each patent against the filters by
               reading its text, with no index. Kept only as a baseline.
-  auto        Pick prefilter or mask from the share of units that survive.
+  hnsw        Approximate search with an HNSW graph (FAISS), for large indexes.
+              Built by build_index when an index has 50,000 vectors or more.
+              Filters are applied inside the graph search, and every returned
+              patent is checked against them again.
+  exact       Part 1's choice between prefilter and mask; never HNSW.
+  auto        HNSW when the index has one and no filter is set; otherwise
+              prefilter or mask, from the share of units that survive.
+              Measured in benchmarks/large/search.json.
 """
 
 from __future__ import annotations
 
 import difflib
+import os
 import pickle
 import re
 import time
@@ -32,7 +40,7 @@ import numpy as np
 
 from .text_utils import TOKEN_RE, normalize_title, parse_keywords, stem
 
-STRATEGIES = ("prefilter", "mask", "postfilter", "auto")
+STRATEGIES = ("prefilter", "mask", "postfilter", "hnsw", "exact", "auto")
 # A result shows up to this many matching pieces of its patent.
 MAX_EXCERPTS = 3
 # An extra piece is shown only if it scores within this much of the
@@ -47,6 +55,20 @@ EXCERPT_MARGIN = 0.10
 # crossover depends on hardware, so this is a tuned value, not a constant
 # of the method (see DECISIONS.md).
 AUTO_PREFILTER_MAX_SHARE = 0.08
+# HNSW, when available, is used only without filters (a similar-patent
+# search, which only excludes the source patent, still uses it). Measured on 75,018 passages (benchmarks/large/search.json): unfiltered, the
+# same top 10 as exact search for Part 1's queries and 99% for queries from
+# other fields; with any filter, recall fell (88% for other-field queries even
+# with a broad filter keeping 68% of patents, 64% with a narrow one) for at
+# most a 1.5x gain, because a filtered graph search misses allowed passages.
+# Passages fetched from the graph before grouping by patent; also its search
+# width. 200 gave 100% recall@10 without filters (100 gave 98%).
+HNSW_CANDIDATES = 200
+HNSW_FILE = "hnsw.faiss"
+# Candidate patents (best first, by the graph) rescored exactly over all their
+# passages, as a multiple of the results asked for. Rescoring every patent the
+# graph touched halved the speed-up; 3x kept recall and evidence identical.
+HNSW_RESCORE_FACTOR = 3
 
 
 @dataclass
@@ -124,6 +146,10 @@ class SearchReport:
 
 class PatentSearch:
     def __init__(self, index_dir: str = "index", model=None):
+        self.hnsw_path = os.path.join(index_dir, HNSW_FILE)
+        # Checked once: a file-system check on every search cost ~0.1 ms on Windows.
+        self._has_hnsw = os.path.exists(self.hnsw_path)
+        self._hnsw = None
         with open(f"{index_dir}/index.pkl", "rb") as handle:
             bundle = pickle.load(handle)
         self.vectors: np.ndarray = np.load(f"{index_dir}/vectors.npy")
@@ -172,6 +198,22 @@ class PatentSearch:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self.model_name)
         return self._model
+
+    @property
+    def has_hnsw(self) -> bool:
+        return self._has_hnsw
+
+    @property
+    def hnsw(self):
+        """The HNSW graph, loaded on first use (FAISS is only imported then)."""
+        if self._hnsw is None:
+            import faiss
+            graph = faiss.read_index(self.hnsw_path)
+            if graph.ntotal != len(self.vectors):
+                raise ValueError(f"{self.hnsw_path} holds {graph.ntotal} vectors but the index "
+                                 f"has {len(self.vectors)}; rebuild the index")
+            self._hnsw = graph
+        return self._hnsw
 
     def embed_query(self, query: str) -> np.ndarray:
         return self.model.encode([query], convert_to_numpy=True,
@@ -496,6 +538,59 @@ class PatentSearch:
             ranked.append((self.patent_order[positions[local]], float(best[local]), row))
         return ranked, int(rows.size)
 
+    def _rank_hnsw(self, query_vector: np.ndarray, allowed_mask: np.ndarray | None,
+                   top_k: int) -> tuple[list[tuple[str, float, int]], int]:
+        """Best passage per patent from the HNSW graph, filters applied inside.
+
+        One patent can own many of the returned passages, so the search is
+        repeated twice as wide until top_k distinct patents come back. With a
+        filter, excluded passages are skipped while the graph is walked, so
+        the search is widened in proportion to the share of passages allowed.
+
+        The graph only chooses the candidate patents. The best 3 x top_k are
+        then rescored exactly over all their passages, so its score, its best passage
+        and the evidence shown are the same as exact search gives; without
+        this, a patent found through a nearly-best passage showed that passage.
+        """
+        import faiss
+
+        keep, selector, row_allowed = None, None, None
+        available = len(self.vectors)
+        if allowed_mask is not None:
+            row_allowed = allowed_mask[self.unit_patent]
+            available = int(row_allowed.sum())
+            if not available:
+                return [], 0
+            keep = np.packbits(row_allowed, bitorder="little")
+            selector = faiss.IDSelectorBitmap(len(self.vectors), faiss.swig_ptr(keep))
+        k = int(np.ceil(HNSW_CANDIDATES / max(available / len(self.vectors), 0.01)))
+        while True:
+            width = min(k, available)
+            params = faiss.SearchParametersHNSW()
+            params.efSearch = width
+            if selector is not None:
+                params.sel = selector
+            scores, rows = self.hnsw.search(query_vector[None, :].astype(np.float32),
+                                            width, params=params)
+            best: dict[str, tuple[float, int]] = {}
+            for score, row in zip(scores[0], rows[0]):
+                if row < 0 or (row_allowed is not None and not row_allowed[row]):
+                    continue   # the second check: a filter can never be loosened
+                patent = self.patent_order[self.unit_patent[row]]
+                best.setdefault(patent, (float(score), int(row)))   # best first
+            if len(best) >= top_k or width >= available:
+                break
+            k *= 2
+        del keep
+        rescored = []
+        for patent_id in list(best)[:top_k * HNSW_RESCORE_FACTOR]:   # best first
+            start, end = self.unit_rows_of(patent_id)
+            scores = self.vectors[start:end] @ query_vector
+            top = int(np.argmax(scores))      # first maximum, as exact search breaks ties
+            rescored.append((patent_id, float(scores[top]), start + top))
+        rescored.sort(key=lambda item: (-item[1], self.patent_position[item[0]]))
+        return rescored[:top_k], width
+
     def _rank_postfilter(self, scores: np.ndarray, filters: Filters, top_k: int,
                          exclude: frozenset[str] = frozenset()
                          ) -> list[tuple[str, float, int]]:
@@ -588,6 +683,14 @@ class PatentSearch:
         else:
             report.candidate_units = len(self.units)
 
+        if strategy == "hnsw" and not self.has_hnsw:
+            raise ValueError("this index has no HNSW graph; rebuild it with --hnsw")
+        exact_only = strategy == "exact"
+        if exact_only:
+            strategy = "auto"
+        if strategy == "auto" and not naive and not exact_only and self.has_hnsw \
+                and not (filters and filters.active()):
+            strategy = "hnsw"      # no filter: only an exclusion (similar-patent search)
         if strategy == "auto":
             share = report.candidate_units / max(len(self.units), 1)
             strategy = ("prefilter" if allowed is not None
@@ -604,6 +707,13 @@ class PatentSearch:
             report.candidate_units = len(self.units)
             report.candidate_patents = len(self.patents) - len(exclude)
             report.strategy = "postfilter"
+        elif strategy == "hnsw":
+            start = time.perf_counter()
+            ranked, report.scored_units = self._rank_hnsw(query_vector, allowed_mask, top_k)
+            # Graph search and grouping are interleaved, so reported together.
+            timings["score_ms"] = (time.perf_counter() - start) * 1000
+            timings["rank_ms"] = 0.0
+            report.strategy = "hnsw"
         elif strategy == "prefilter" and allowed_mask is not None:
             start = time.perf_counter()
             ranked, report.scored_units = self._rank_gathered(query_vector, allowed_mask, top_k)

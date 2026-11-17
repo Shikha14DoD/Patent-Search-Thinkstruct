@@ -87,11 +87,16 @@ def main() -> None:
 
     # Loading the model is a one-off start-up cost, so it is timed apart
     # from the search itself.
-    model_load_s = 0.0
+    model_load_s = graph_load_s = 0.0
     if args.query:
         start = time.perf_counter()
         engine.model
         model_load_s = time.perf_counter() - start
+    if (args.query or args.similar_to is not None) and engine.has_hnsw \
+            and args.strategy in ("auto", "hnsw"):
+        start = time.perf_counter()
+        engine.hnsw                      # also a one-off cost, timed apart
+        graph_load_s = time.perf_counter() - start
 
     source = None
     if args.similar_to is not None:
@@ -171,7 +176,9 @@ def main() -> None:
     if ranked:
         print(f"Strategy {report.strategy}: {report.candidate_patents} of "
               f"{len(engine.patents)} patents eligible, "
-              f"{report.scored_units} of {report.total_units} units scored")
+              + (f"{report.scored_units} passages fetched from the HNSW graph "
+                 f"(of {report.total_units})" if report.strategy == "hnsw" else
+                 f"{report.scored_units} of {report.total_units} units scored"))
     else:
         print(f"{report.candidate_patents} of {len(engine.patents)} patents match the filters")
     stages = " · ".join(f"{name.replace('_ms', '')} {value:.1f} ms"
@@ -179,6 +186,8 @@ def main() -> None:
     print(f"Timing: {stages}")
     if model_load_s:
         print(f"(one-off model load: {model_load_s:.1f} s, not part of the search time)")
+    if graph_load_s:
+        print(f"(one-off HNSW graph load: {graph_load_s:.1f} s, not part of the search time)")
 
 
 if __name__ == "__main__":
