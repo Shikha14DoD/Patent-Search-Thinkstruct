@@ -33,11 +33,13 @@ class OnnxEncoder:
         from huggingface_hub import hf_hub_download
         from transformers import AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(repo)
+        from .model import revision_for
+        revision = revision_for(repo)
+        self.tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision)
         options = ort.SessionOptions()
         options.intra_op_num_threads = threads or os.cpu_count() or 1
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.session = ort.InferenceSession(hf_hub_download(repo, onnx_file), options,
+        self.session = ort.InferenceSession(hf_hub_download(repo, onnx_file, revision=revision), options,
                                             providers=["CPUExecutionProvider"])
         self.input_names = {i.name for i in self.session.get_inputs()}
 

@@ -196,7 +196,9 @@ class PatentSearch:
         """Loaded on first use so that filter-only searches need no model."""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name)
+            from .model import revision_for
+            self._model = SentenceTransformer(self.model_name,
+                                              revision=revision_for(self.model_name))
         return self._model
 
     @property

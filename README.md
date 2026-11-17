@@ -90,7 +90,8 @@ searching the words by meaning, or dropping one filter.
    dropped, and every piece fitted to the model's 256-token input limit.
 2. **Build the index** (`src/build_index.py`). Each piece is turned into a 384-number vector
    with `sentence-transformers/all-MiniLM-L6-v2`, so pieces with similar meaning get similar
-   vectors. Lookup tables are built for the filters: for each word, which patents contain it in
+   vectors. The model is pinned to one exact version (`src/model.py`), so a later update
+   under the same name can't quietly change the vectors or the results reported here. Lookup tables are built for the filters: for each word, which patents contain it in
    their title or abstract; for each classification prefix, which patents have it.
 3. **Search** (`src/search.py`). The filters are resolved through the lookup tables, the query
    is embedded once and compared with the eligible pieces, each patent is ranked by its best

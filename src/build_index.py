@@ -32,7 +32,7 @@ from .load_data import MAX_MODEL_TOKENS, load_corpus
 from .search import HNSW_FILE
 from .text_utils import normalize_title, tokenize
 
-DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+from .model import DEFAULT_MODEL, revision_for  # noqa: F401  (DEFAULT_MODEL re-exported)
 # Texts embedded between two cache writes. Smaller = less work lost if the
 # build is interrupted.
 CHECKPOINT_TEXTS = 2048
@@ -136,7 +136,7 @@ def embed_units(texts: list[str], model_name: str, cache: EmbeddingCache,
         from sentence_transformers import SentenceTransformer  # imported late: slow
 
         start = time.perf_counter()
-        model = SentenceTransformer(model_name)
+        model = SentenceTransformer(model_name, revision=revision_for(model_name))
         pool = None
         if workers > 1:
             # Each worker process reads these when it starts and uses one thread.
@@ -307,7 +307,7 @@ def main() -> None:
     from transformers import AutoTokenizer
 
     start = time.perf_counter()
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=revision_for(args.model))
     patents, units, ingest_report = load_corpus(args.data, tokenizer)
     timings["load_and_clean_s"] = time.perf_counter() - start
     print(f"loaded {len(patents)} patents -> {len(units)} units "

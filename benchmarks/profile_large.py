@@ -79,7 +79,8 @@ def main() -> None:
     timings["clean"] = time.perf_counter() - start
 
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL)
+    from src.model import MODEL_REVISION
+    tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL, revision=MODEL_REVISION)
     start = time.perf_counter()
     units, _ = build_units(patents, TokenCounter(tokenizer))
     timings["split"] = time.perf_counter() - start

@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 
 from benchmarks.timing import QUERIES  # noqa: E402
 from src.build_index import DEFAULT_MODEL  # noqa: E402
+from src.model import MODEL_REVISION  # noqa: E402
 from src.fast_embed import ONNX_FILES, OnnxEncoder  # noqa: E402
 from src.load_data import TokenCounter, build_units, parse_record, patent_files, spread  # noqa: E402
 
@@ -47,7 +48,7 @@ def sample_passages(data: str, count: int, files: int, seed: int = 0) -> list[st
             records += [r for r in json.load(handle) if isinstance(r, dict) and r.get("doc_number")]
     rng = random.Random(seed)
     from transformers import AutoTokenizer
-    counter = TokenCounter(AutoTokenizer.from_pretrained(DEFAULT_MODEL))
+    counter = TokenCounter(AutoTokenizer.from_pretrained(DEFAULT_MODEL, revision=MODEL_REVISION))
     patents = [parse_record(r, "") for r in rng.sample(records, min(200, len(records)))]
     texts = sorted({u.text for u in build_units(patents, counter)[0]})
     return rng.sample(texts, min(count, len(texts)))
@@ -73,7 +74,7 @@ def main() -> None:
     print(f"{len(texts)} distinct passages sampled from {args.files} files")
 
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(DEFAULT_MODEL)
+    model = SentenceTransformer(DEFAULT_MODEL, revision=MODEL_REVISION)
 
     def torch_encoder(batch):
         return lambda items: model.encode(items, batch_size=batch, convert_to_numpy=True,
