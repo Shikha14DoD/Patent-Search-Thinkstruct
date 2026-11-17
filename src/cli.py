@@ -15,7 +15,8 @@ import sys
 import textwrap
 import time
 
-from .search import EXCERPT_MARGIN, MAX_EXCERPTS, STRATEGIES, Filters, PatentSearch
+from .search import (EXCERPT_MARGIN, MAX_EXCERPTS, STRATEGIES, Filters, PatentSearch, date_bound,
+                     newest_first)
 
 
 def _quote(value: str) -> str:
@@ -37,8 +38,14 @@ def as_command(query: str, filters: Filters, args) -> str:
                         ("--title-or-abstract-keywords", filters.title_or_abstract_keywords)):
         if value:
             parts.append(f"{flag} {_quote(value)}")
+    for flag, value in (("--published-from", filters.published_from),
+                        ("--published-to", filters.published_to)):
+        if value:
+            parts.append(f"{flag} {value}")
     if filters.match_any:
         parts.append("--match-any")
+    if getattr(args, "sort", "relevance") != "relevance":
+        parts.append(f"--sort {args.sort}")
     if args.top != 10:
         parts.append(f"--top {args.top}")
     return " ".join(parts)
@@ -61,6 +68,13 @@ def main() -> None:
     parser.add_argument("--abstract-keywords", default="")
     parser.add_argument("--title-or-abstract-keywords", default="")
     parser.add_argument("--exact-title", default="")
+    parser.add_argument("--published-from", default="", metavar="DATE",
+                        help="Published on or after: YYYY, YYYY-MM or YYYY-MM-DD")
+    parser.add_argument("--published-to", default="", metavar="DATE",
+                        help="Published on or before: YYYY, YYYY-MM or YYYY-MM-DD")
+    parser.add_argument("--sort", choices=("relevance", "newest"), default="relevance",
+                        help="Order of the results shown: by score, or the same results "
+                             "newest first")
     parser.add_argument("--match-any", action="store_true",
                         help="Match any keyword instead of all of them")
     parser.add_argument("--strategy", choices=STRATEGIES, default="auto",
@@ -83,7 +97,15 @@ def main() -> None:
         title_or_abstract_keywords=args.title_or_abstract_keywords,
         exact_title=args.exact_title,
         match_any=args.match_any,
+        published_from=args.published_from,
+        published_to=args.published_to,
     )
+    for value in (args.published_from, args.published_to):
+        if value:
+            try:
+                date_bound(value, end=False)
+            except ValueError as error:
+                parser.error(str(error))
 
     # Loading the model is a one-off start-up cost, so it is timed apart
     # from the search itself.
@@ -119,6 +141,8 @@ def main() -> None:
         report = engine.search(args.query, filters, top_k=args.top, strategy=args.strategy,
                                max_excerpts=args.excerpts)
     ranked = bool(args.query) or source is not None
+    if args.sort == "newest" and ranked:
+        report.results = newest_first(report.results)
 
     if report.filter_counts:
         print("Filters:")
@@ -147,6 +171,8 @@ def main() -> None:
 
     if not ranked:
         print("No query given: showing the filtered patents, newest first.\n")
+    elif args.sort == "newest":
+        print(f"The {len(report.results)} best matches, shown newest first.\n")
 
     for result in report.results:
         print(f"#{result.rank}  {result.title}")

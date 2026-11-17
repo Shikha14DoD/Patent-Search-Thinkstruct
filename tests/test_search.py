@@ -274,3 +274,62 @@ def test_filters_matching_only_the_source_say_so(family):
 def test_patent_without_abstract_uses_its_claim(family):
     _, used = family.search_similar("20240000004")
     assert used == ["Claim 1"]
+
+
+# -- publication date filter and newest-first ordering --------------------
+
+def test_date_bounds_accept_year_month_and_day():
+    from src.search import date_bound
+    assert date_bound("2024", end=False) == "2024-01-01"
+    assert date_bound("2024", end=True) == "2024-12-31"
+    assert date_bound("2024-03", end=True) == "2024-03-31"
+    assert date_bound("2024-03-15", end=False) == "2024-03-15"
+    with pytest.raises(ValueError):
+        date_bound("24-03", end=False)
+
+
+@pytest.fixture
+def dated_engine(tmp_path):
+    """Three patents published in different months, plus one with no date."""
+    patents = []
+    for patent_id, date in (("1", "2024-02-15"), ("2", "2024-06-20"), ("3", "2025-01-09"),
+                            ("4", "")):
+        patent = make_patent(patent_id, f"WHEEL {patent_id}", "A wheel.", "B60B2700",
+                             ["1 . A wheel comprising a rim."])
+        patent.publication_date = date
+        patents.append(patent)
+    scores = {("1", "Claim 1"): 0.9, ("2", "Claim 1"): 0.8, ("3", "Claim 1"): 0.7,
+              ("4", "Claim 1"): 0.6}
+    return make_engine(tmp_path, patents, scores)
+
+
+def test_date_range_keeps_only_patents_published_inside_it(dated_engine):
+    report = dated_engine.search(query_vector=QUERY, filters=Filters(published_from="2024-03",
+                                                                     published_to="2024"))
+    assert [r.patent_id for r in report.results] == ["2"]
+    year = dated_engine.search(query_vector=QUERY, filters=Filters(published_from="2025"))
+    assert [r.patent_id for r in year.results] == ["3"]      # the undated patent never passes
+
+
+def test_an_empty_date_range_says_what_the_index_covers(dated_engine):
+    report = dated_engine.search(query_vector=QUERY, filters=Filters(published_to="2023"))
+    assert not report.results and report.empty_reason.startswith("published")
+    drop = [s for s in report.suggestions if s.kind == "drop_filter"][0]
+    assert "2024-02-15 to 2025-01-09" in drop.message
+    assert drop.filters.published_from == "" and drop.filters.published_to == ""
+
+
+def test_date_filter_agrees_with_the_naive_method(dated_engine):
+    filters = Filters(published_from="2024-06-01", published_to="2025-12")
+    exact = dated_engine.search(query_vector=QUERY, filters=filters, strategy="prefilter")
+    naive = dated_engine.search(query_vector=QUERY, filters=filters, strategy="postfilter")
+    assert [r.patent_id for r in exact.results] == [r.patent_id for r in naive.results] == ["2", "3"]
+
+
+def test_newest_first_reorders_the_same_results(dated_engine):
+    from src.search import newest_first
+    report = dated_engine.search(query_vector=QUERY, top_k=3)
+    assert [r.patent_id for r in report.results] == ["1", "2", "3"]       # by score
+    ordered = newest_first(report.results)
+    assert [r.patent_id for r in ordered] == ["3", "2", "1"]
+    assert [r.rank for r in ordered] == [1, 2, 3]

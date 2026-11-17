@@ -13,7 +13,7 @@ reversal is part of the record.
 `benchmarks/results.md`, measured on an 8-core Windows 11 laptop with Python 3.12 and NumPy 2.5.
 Token counts use the model's own tokenizer.
 
-Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope; D18 measures search quality; D21 to D25 are Part 3 (efficiency on the large dataset, results in `benchmarks/large/`).
+Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope; D18 measures search quality; D21 to D25 are Part 3 (efficiency on the large dataset, results in `benchmarks/large/`); D26 adds the date filter.
 
 ---
 
@@ -299,6 +299,14 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Chosen:** HNSW only when no filter is set (a similar-patent search, which only excludes the source patent, still uses it). Any filter uses Part 1's prefilter or mask.
 - **Evidence:** With this rule, every filtered scenario has 100% recall and runs at the same speed as before (0.8–1.2×) (`search.json`).
 - **Trade-off:** Filtered search still grows linearly with the index. At Part 2's scale, filters run inside OpenSearch's vector search instead.
+
+## D26. A publication-date filter, and newest-first ordering
+- **Status:** Validated
+- **Problem:** Patent searches are usually bounded in time: prior art must be published before an invention's priority date, and trend questions ask what was filed in a period. Part 1 had no date filter.
+- **Chosen:** `--published-from` and `--published-to`, inclusive, each a year, month or day (`2024`, `2024-06`, `2024-06-20`). Like every filter it is strict, resolved before scoring (two binary searches over patents sorted by date), counted, and covered by the suggestions: an empty range offers its removal and says which dates the index covers. `--sort newest` reorders the best matches by date.
+- **Why "published", not "filed":** the only date in the data is the weekly publication date in the file name (D3). Calling it a filing date would be wrong, and a priority-date cut-off would need the priority date added at ingestion.
+- **Trade-offs:** Patents without a date never pass a date filter; this includes the large dataset, whose file names carry none. Sorting by date reorders the top results by relevance rather than retrieving the newest patents overall, which would need a relevance threshold.
+- **Validation:** Five tests: year, month and day bounds and a bad format; a range keeps only patents inside it and drops undated ones; an empty range's suggestion names the index's dates and clears both bounds; the date filter gives the same results by the indexed and naive methods; newest-first keeps the same patents and renumbers them.
 
 ## Later experiments (not yet run)
 

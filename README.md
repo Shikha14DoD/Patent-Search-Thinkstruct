@@ -53,9 +53,19 @@ optional filters:
 | Abstract keywords | `--abstract-keywords "tread groove"` | Abstract contains every word (`--match-any` for any word) |
 | Title or abstract keywords | `--title-or-abstract-keywords sensor` | Either field contains the word |
 | Exact title | `--exact-title "PNEUMATIC TIRE"` | Title matches, ignoring case and punctuation |
+| Publication date | `--published-from 2024-06 --published-to 2025` | Published within the range, inclusive; a year, month or day each work |
 
 Quoted words inside a filter (`'"wheel hub"'`) must appear together as a phrase. Filters
 combine with AND, and they are strict: a patent that fails one never appears.
+
+**Dates are publication dates.** The data has no filing or priority dates, only the weekly
+publication date in each file's name (D3), so the filter says "published". In prior-art work
+the useful cut-off is "published before my priority date", which `--published-to` gives.
+The large dataset's file names carry no dates, so its patents never pass a date filter (D26).
+
+**Order:** results are ranked by score. `--sort newest` shows the same best matches newest
+first; it reorders them, it does not fetch the newest patents overall. With no query, filtered
+patents are always listed newest first.
 
 **Output,** for each result: rank, score, patent number, title, classification, publication
 date, a Google Patents link, and up to three matching passages labelled with where they come
@@ -381,6 +391,7 @@ python -m src.cli "tire pressure" --title-or-abstract-keywords sensor
 python -m src.cli --exact-title "PNEUMATIC TIRE"
 python -m src.cli "tire pressure" --title-keywords "flat tyre warning"
 python -m src.cli --similar-to US20240051333A1 --classification B60B
+python -m src.cli "tire pressure sensor" --published-from 2025 --sort newest
 ```
 
 The fifth one matches nothing and shows the suggestions. The last one lists patents similar to
@@ -421,9 +432,9 @@ in Search quality exactly.
 python -m pytest tests -q
 ```
 
-67 tests. 57 check the cleaning rules (claim numbering, numeral separation, token limits), the
-search (filters and their edge cases, filtering strategies, excerpts, suggestions, similar
-patents), the BM25 baseline, the self-retrieval ranking, large-data loading and HNSW search, on
+72 tests. 62 check the cleaning rules (claim numbering, numeral separation, token limits), the
+search (filters and their edge cases, the date filter and newest-first order, filtering
+strategies, excerpts, suggestions, similar patents), the BM25 baseline, the self-retrieval ranking, large-data loading and HNSW search, on
 tiny hand-made indexes; they need neither the model nor the dataset. The other 10 test the Part 2 proof of concept and need
 PostgreSQL running (`docker compose up -d`); without it they are skipped.
 

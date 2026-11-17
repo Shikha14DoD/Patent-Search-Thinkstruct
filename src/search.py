@@ -29,6 +29,7 @@ return the same results; only the work done differs.
 
 from __future__ import annotations
 
+import bisect
 import difflib
 import os
 import pickle
@@ -81,10 +82,43 @@ class Filters:
     title_or_abstract_keywords: str = ""
     exact_title: str = ""
     match_any: bool = False       # False = every keyword must appear
+    # Publication date range, inclusive: "2024", "2024-03" or "2024-03-15". The
+    # data has publication dates only (the weekly file names, D3), not filing dates.
+    published_from: str = ""
+    published_to: str = ""
 
     def active(self) -> bool:
         return any([self.classification, self.title_keywords, self.abstract_keywords,
-                    self.title_or_abstract_keywords, self.exact_title])
+                    self.title_or_abstract_keywords, self.exact_title,
+                    self.published_from, self.published_to])
+
+
+DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
+
+
+def date_bound(text: str, end: bool) -> str:
+    """'2024' -> '2024-01-01' (from) or '2024-12-31' (to); '2024-03' -> '2024-03-01' / '2024-03-31'.
+
+    Bounds are compared as text, which orders ISO dates correctly; '-31' is a
+    safe end for any month because no date sorts after it within that month.
+    """
+    text = text.strip()
+    if not DATE_RE.match(text):
+        raise ValueError(f"date {text!r} is not YYYY, YYYY-MM or YYYY-MM-DD")
+    if len(text) == 4:
+        return text + ("-12-31" if end else "-01-01")
+    if len(text) == 7:
+        return text + ("-31" if end else "-01")
+    return text
+
+
+def newest_first(results: list[Result]) -> list[Result]:
+    """The same results, newest publication first (ties keep their relevance order).
+
+    This reorders the top results; it does not fetch the newest patents overall.
+    """
+    ordered = sorted(results, key=lambda r: r.publication_date or "", reverse=True)
+    return [replace(result, rank=rank) for rank, result in enumerate(ordered, start=1)]
 
 
 @dataclass
@@ -150,6 +184,7 @@ class PatentSearch:
         # Checked once: a file-system check on every search cost ~0.1 ms on Windows.
         self._has_hnsw = os.path.exists(self.hnsw_path)
         self._hnsw = None
+        self._date_order: list[tuple[str, str]] | None = None   # (date, patent id), sorted
         with open(f"{index_dir}/index.pkl", "rb") as handle:
             bundle = pickle.load(handle)
         self.vectors: np.ndarray = np.load(f"{index_dir}/vectors.npy")
@@ -335,7 +370,24 @@ class PatentSearch:
             if raw:
                 found.append((attribute, f'{label} "{raw}"', self._keyword_match(
                     parse_keywords(raw), inverted, phrases, filters.match_any)))
+        if filters.published_from or filters.published_to:
+            low = date_bound(filters.published_from, end=False) if filters.published_from else ""
+            high = date_bound(filters.published_to, end=True) if filters.published_to else "9999"
+            # Patents sorted by date once; a range is two binary searches.
+            dates = self._dates_sorted
+            first = bisect.bisect_left(dates, (low, ""))
+            last = bisect.bisect_right(dates, (high, "\uffff"))
+            hits = {pid for date, pid in dates[first:last] if date}
+            span = f"{filters.published_from or '…'} to {filters.published_to or '…'}"
+            found.append(("published", f"published {span}", hits))
         return found
+
+    @property
+    def _dates_sorted(self) -> list[tuple[str, str]]:
+        if self._date_order is None:
+            self._date_order = sorted((p["publication_date"] or "", pid)
+                                      for pid, p in self.patents.items())
+        return self._date_order
 
     def resolve_filters(self, filters: Filters) -> tuple[set[str] | None, dict[str, int], str]:
         """Return (allowed patent ids, per-filter counts, name of an empty filter).
@@ -447,13 +499,23 @@ class PatentSearch:
         for attribute, name, hits in found:
             if hits and not none_empty:
                 continue
-            without = replace(filters, **{attribute: ""})
-            if attribute != "classification" and not hits:
+            if attribute == "published":
+                without = replace(filters, published_from="", published_to="")
+            else:
+                without = replace(filters, **{attribute: ""})
+            if attribute not in ("classification", "published") and not hits:
                 words = getattr(filters, attribute).replace('"', "")
                 new_query = f"{query} {words}".strip()
                 offer("search_by_meaning", f'Search "{words}" by meaning instead of requiring '
                       "the exact words (ranks all text of {count} patents)",
                       without, new_query)
+            if attribute == "published":
+                dated = [date for date, _ in self._dates_sorted if date]
+                coverage = (f" (this index covers {dated[0]} to {dated[-1]})" if dated
+                            else " (this index has no publication dates)")
+                offer("drop_filter", f"Remove the {name} filter{coverage} → {{count}} patents",
+                      without)
+                continue
             offer("drop_filter", f"Remove the {name} filter → {{count}} patents", without)
 
         return suggestions[:limit]
@@ -492,6 +554,11 @@ class PatentSearch:
             return False
         if filters.title_or_abstract_keywords and not field_matches(
                 filters.title_or_abstract_keywords, [title, abstract]):
+            return False
+        date = patent["publication_date"] or ""
+        if filters.published_from and not (date and date >= date_bound(filters.published_from, False)):
+            return False
+        if filters.published_to and not (date and date <= date_bound(filters.published_to, True)):
             return False
         return True
 

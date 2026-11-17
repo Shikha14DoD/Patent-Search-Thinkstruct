@@ -15,7 +15,7 @@ import time
 
 import streamlit as st
 
-from src.search import EXCERPT_MARGIN, Filters, PatentSearch, Suggestion
+from src.search import EXCERPT_MARGIN, Filters, PatentSearch, Suggestion, date_bound, newest_first
 
 st.set_page_config(page_title="Patent Evidence Explorer", layout="wide")
 
@@ -43,7 +43,8 @@ DESCRIBE, SIMILAR = "Description of an idea or claim", "Similar to a patent ID"
 FILTER_KEYS = {"classification": "classification", "title_keywords": "title_keywords",
                "abstract_keywords": "abstract_keywords",
                "title_or_abstract_keywords": "either_keywords",
-               "exact_title": "exact_title", "match_any": "match_any"}
+               "exact_title": "exact_title", "match_any": "match_any",
+               "published_from": "published_from", "published_to": "published_to"}
 
 
 def apply_suggestion(suggestion: Suggestion) -> None:
@@ -68,7 +69,16 @@ with st.sidebar:
                                     help="Example: sensor")
     exact_title = st.text_input("Exact title", key="exact_title", help="Example: PNEUMATIC TIRE")
     match_any = st.checkbox("Keywords: match any word (default: every word)", key="match_any")
-    top_k = st.slider("Results", 1, 30, 10)
+    st.caption("Publication date (the data has no filing dates)")
+    date_from, date_to = st.columns(2)
+    published_from = date_from.text_input("From", key="published_from",
+                                          help="YYYY, YYYY-MM or YYYY-MM-DD, e.g. 2024")
+    published_to = date_to.text_input("To", key="published_to",
+                                      help="YYYY, YYYY-MM or YYYY-MM-DD, e.g. 2024-06")
+    sort = st.radio("Order results by", ["Relevance", "Newest first"], key="sort",
+                    help="Newest first shows the same best matches, newest at the top")
+    top_k = st.number_input("Results to show", min_value=1, max_value=100_000, value=10, step=10,
+                            help="Up to every patent that passes the filters")
 
 st.title("Patent Evidence Explorer")
 st.caption("Semantic patent search that shows the claim or paragraph behind every result.")
@@ -77,6 +87,7 @@ if not os.path.isdir(index_dir):
     st.error(f"No index folder '{index_dir}'. Build it first: python -m src.build_index")
     st.stop()
 engine = load_engine(index_dir)
+top_k = min(int(top_k), len(engine.patents))
 
 mode = st.radio("Search by", [DESCRIBE, SIMILAR], horizontal=True, key="mode")
 if mode == SIMILAR:
@@ -90,7 +101,15 @@ else:
 filters = Filters(classification=classification, title_keywords=title_keywords,
                   abstract_keywords=abstract_keywords,
                   title_or_abstract_keywords=either_keywords,
-                  exact_title=exact_title, match_any=match_any)
+                  exact_title=exact_title, match_any=match_any,
+                  published_from=published_from, published_to=published_to)
+for value in (published_from, published_to):
+    if value:
+        try:
+            date_bound(value, end=False)
+        except ValueError as error:
+            st.error(f"Publication date: {error}.")
+            st.stop()
 
 clicked = st.button("Search", type="primary")
 if not (clicked or st.session_state.pop("run", False)):
@@ -116,6 +135,8 @@ else:
     report = engine.search(query, filters, top_k=top_k)
 elapsed_ms = (time.perf_counter() - start) * 1000
 ranked = bool(query.strip()) or source is not None
+if ranked and sort == "Newest first":
+    report.results = newest_first(report.results)
 
 def badge(color: str, text: str) -> str:
     """A coloured label (Streamlit badge markdown); brackets would end it early."""
@@ -153,12 +174,19 @@ if ranked:
     st.markdown(" &nbsp; ".join([
         badge("blue", f"{report.candidate_patents} of {len(engine.patents)} patents eligible"),
         badge("violet", f"method: {report.strategy}"),
-        badge("orange", f"{elapsed_ms:.0f} ms")]))
+        badge("orange", f"{elapsed_ms:.0f} ms")]
+        + ([badge("gray", f"best {len(report.results)} matches, newest first")]
+           if sort == "Newest first" else [])))
 else:
-    st.info(f"No query given, so there is nothing to score against: showing the "
-            f"{report.candidate_patents} patents that pass the filters, newest first, with "
-            f"their abstracts. Add a query to rank them and see matching passages.")
+    st.info("No query given, so there is nothing to score against: showing the patents that "
+            "pass the filters, newest first, with their abstracts. Add a query to rank them "
+            "and see matching passages.")
     st.markdown(badge("orange", f"{elapsed_ms:.0f} ms"))
+
+eligible = report.candidate_patents
+if eligible > len(report.results):
+    st.info(f"Showing {len(report.results)} of {eligible} patents that pass the filters. "
+            "Increase 'Results to show' in the sidebar to see more.")
 
 for result in report.results:
     with st.container(border=True):
