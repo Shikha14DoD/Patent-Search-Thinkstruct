@@ -15,7 +15,7 @@ import time
 
 import streamlit as st
 
-from src.search import EXCERPT_MARGIN, Filters, PatentSearch
+from src.search import EXCERPT_MARGIN, Filters, PatentSearch, Suggestion
 
 st.set_page_config(page_title="Patent Evidence Explorer", layout="wide")
 
@@ -38,16 +38,36 @@ def show_excerpt(lead: str, label: str, note: str, score: float | None, text: st
     st.markdown(f"> {html.escape(text)}")
 
 
+DESCRIBE, SIMILAR = "Description of an idea or claim", "Similar to a patent ID"
+# Session keys of the inputs, so a suggestion can fill them in.
+FILTER_KEYS = {"classification": "classification", "title_keywords": "title_keywords",
+               "abstract_keywords": "abstract_keywords",
+               "title_or_abstract_keywords": "either_keywords",
+               "exact_title": "exact_title", "match_any": "match_any"}
+
+
+def apply_suggestion(suggestion: Suggestion) -> None:
+    """Put a suggestion's query and filters into the inputs, and search again."""
+    for attribute, key in FILTER_KEYS.items():
+        st.session_state[key] = getattr(suggestion.filters, attribute)
+    if suggestion.query and st.session_state.get("mode") != SIMILAR:
+        st.session_state["query"] = suggestion.query
+    st.session_state["run"] = True
+
+
 with st.sidebar:
     st.header("Filters")
     index_dir = st.text_input("Index folder", "index",
                               help="'index' for Part 1, 'index_large' for Part 3")
-    classification = st.text_input("Classification prefix", help="Example: B60B, B60C11")
-    title_keywords = st.text_input("Title keywords", help="Example: hub")
-    abstract_keywords = st.text_input("Abstract keywords", help='Example: "tread groove" (quotes = exact phrase)')
-    either_keywords = st.text_input("Title or abstract keywords", help="Example: sensor")
-    exact_title = st.text_input("Exact title", help="Example: PNEUMATIC TIRE")
-    match_any = st.checkbox("Keywords: match any word (default: every word)")
+    classification = st.text_input("Classification prefix", key="classification",
+                                   help="Example: B60B, B60C11")
+    title_keywords = st.text_input("Title keywords", key="title_keywords", help="Example: hub")
+    abstract_keywords = st.text_input("Abstract keywords", key="abstract_keywords",
+                                      help='Example: "tread groove" (quotes = exact phrase)')
+    either_keywords = st.text_input("Title or abstract keywords", key="either_keywords",
+                                    help="Example: sensor")
+    exact_title = st.text_input("Exact title", key="exact_title", help="Example: PNEUMATIC TIRE")
+    match_any = st.checkbox("Keywords: match any word (default: every word)", key="match_any")
     top_k = st.slider("Results", 1, 30, 10)
 
 st.title("Patent Evidence Explorer")
@@ -58,12 +78,12 @@ if not os.path.isdir(index_dir):
     st.stop()
 engine = load_engine(index_dir)
 
-mode = st.radio("Search by", ["Description of an idea or claim", "Similar to a patent ID"],
-                horizontal=True)
-if mode == "Similar to a patent ID":
-    query, similar_to = "", st.text_input("Patent ID", help="Example: US20240051333A1")
+mode = st.radio("Search by", [DESCRIBE, SIMILAR], horizontal=True, key="mode")
+if mode == SIMILAR:
+    query, similar_to = "", st.text_input("Patent ID", key="patent_id",
+                                          help="Example: US20240051333A1")
 else:
-    query = st.text_area("Describe the idea, or paste a claim", height=90,
+    query = st.text_area("Describe the idea, or paste a claim", height=90, key="query",
                          help="Example: tire with a sensor that detects loss of pressure")
     similar_to = ""
 
@@ -72,7 +92,8 @@ filters = Filters(classification=classification, title_keywords=title_keywords,
                   title_or_abstract_keywords=either_keywords,
                   exact_title=exact_title, match_any=match_any)
 
-if not st.button("Search", type="primary"):
+clicked = st.button("Search", type="primary")
+if not (clicked or st.session_state.pop("run", False)):
     st.info(f"{len(engine.patents):,} patents and {len(engine.units):,} passages in this index.")
     st.stop()
 
@@ -96,12 +117,21 @@ else:
 elapsed_ms = (time.perf_counter() - start) * 1000
 ranked = bool(query.strip()) or source is not None
 
+def badge(color: str, text: str) -> str:
+    """A coloured label (Streamlit badge markdown); brackets would end it early."""
+    return f":{color}-badge[{text.replace('[', '(').replace(']', ')')}]"
+
+
 counts = {name: count for name, count in report.filter_counts.items() if name != "combined"}
 if counts:
     combined = report.filter_counts.get("combined")
-    st.markdown("**Active filters:** " + " · ".join(
-        f"{html.escape(name)} ({count} patents)" for name, count in counts.items())
-        + (f" → **{combined} patents pass all of them**" if combined is not None else ""))
+    with st.container(border=True):
+        chips = [badge("blue" if count else "red", f"{name}: {count} patents")
+                 for name, count in counts.items()]
+        if combined is not None:
+            chips.append(badge("green" if combined else "red",
+                               f"{combined} patents pass all filters"))
+        st.markdown("**Active filters** &nbsp; " + " &nbsp; ".join(chips))
 
 if not report.results:
     if report.excluded_only:
@@ -113,19 +143,22 @@ if not report.results:
     suggestions = [s for s in report.suggestions
                    if source is None or s.kind != "search_by_meaning"]
     if suggestions:
-        st.markdown("**Try instead:**")
-        for suggestion in suggestions:
-            st.markdown(f"- {html.escape(suggestion.message)}")
+        st.markdown("**Try instead** (click to apply and search again):")
+        for number, suggestion in enumerate(suggestions):
+            st.button(suggestion.message, key=f"suggestion_{number}",
+                      on_click=apply_suggestion, args=(suggestion,))
     st.stop()
 
 if ranked:
-    st.caption(f"{report.candidate_patents} of {len(engine.patents)} patents eligible · "
-               f"method: {report.strategy} · {elapsed_ms:.0f} ms")
+    st.markdown(" &nbsp; ".join([
+        badge("blue", f"{report.candidate_patents} of {len(engine.patents)} patents eligible"),
+        badge("violet", f"method: {report.strategy}"),
+        badge("orange", f"{elapsed_ms:.0f} ms")]))
 else:
     st.info(f"No query given, so there is nothing to score against: showing the "
             f"{report.candidate_patents} patents that pass the filters, newest first, with "
             f"their abstracts. Add a query to rank them and see matching passages.")
-    st.caption(f"{elapsed_ms:.0f} ms")
+    st.markdown(badge("orange", f"{elapsed_ms:.0f} ms"))
 
 for result in report.results:
     with st.container(border=True):
