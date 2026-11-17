@@ -270,6 +270,19 @@ splitting patents into passages and embedding them.)
 | Results must be reproducible, and rebuilding the index takes about 20 minutes | Pins the exact model version, and caches each embedding under the model name plus the exact text, so a change to cleaning re-embeds only the passages whose text changed | A rebuild after a cleaning change took about 5 minutes instead of 20; see [Part 1](docs/PART1.md) |
 | Several workers processing the same queue can collide or crash halfway | Each job is claimed with a time-limited lease, an abandoned job is picked up by another worker, and writes are safe to repeat, so a retry never creates a duplicate | Shown on the 64 weekly files, with 10 tests; see [Part 2](docs/PART2.md) |
 
+## How much data each part used
+
+| Part | Data processed | Size |
+| --- | --- | --- |
+| Part 1: search | The small dataset: 64 weekly JSON files | 640 patents, split into 34,551 passages |
+| Part 2: proof of concept | The same 64 files plus 2 deliberately bad files | 66 jobs, 644 records read, 641 unique patents saved, 3 records set aside |
+| Part 3: search speed | Part 1's 640 patents plus 300 sampled evenly from the large dataset (471 files, about 471,000 patents, 30.7 GB) | 940 patents, 75,018 passages |
+| Part 3: scaling test | Indexes of 118, 235, 470 and 940 patents | 8,938 up to 75,018 passages |
+| Part 3: processing timing | A complete build from scratch on 20 patents from the large dataset | 2,903 passages in 141.8 s |
+
+The full large dataset was not indexed: at the measured embedding rate, all ~471,000 patents would
+take about 26 days on a laptop CPU ([Part 3](docs/PART3.md#processing-measured)).
+
 ## How to run
 
 Run every command from the **top folder of the repository** (the folder that contains
