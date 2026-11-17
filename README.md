@@ -179,6 +179,51 @@ check 1 it can't be reproduced from here.
   it the natural next candidate for the default, but the gains are small, so it needs a larger,
   human-judged test before it's adopted (D18).
 
+### What I would use to improve search quality
+
+The checks point to a product decision that isn't built yet: **no single ranking is best for
+every query.** A researcher who pastes a claim uses the patent's own wording, where keywords win;
+one who describes an idea in everyday words is better served by meaning. Part 2's design already
+ranks with both combined. To improve search quality, I would let the user choose the ranking,
+and pick the default with a test designed to settle it.
+
+**What I would build.** A `--ranking semantic|keyword|combined` option in the CLI and a selector
+on the page. All three modes would share the same passages, strict filters and best-passage rule,
+so only the scoring differs; keyword ranking is already written (`src/bm25.py`), and combining is
+the reciprocal rank fusion used in check 1. Each result would show the passages that scored
+highest under the chosen mode. The combined score is a rank-based number (around 0.03), not a
+similarity, so it would be labelled as such. Semantic would stay the default until the test below.
+
+**Why it isn't built now.** Changing what every user sees on 12 AI-graded queries would be
+deciding on thin evidence. Adding the option without the test would also push the choice onto
+users without telling them when each mode helps.
+
+**The test that would decide the default:**
+
+- **More, realistic queries, split by type.** About 100 information needs in three kinds:
+  everyday descriptions written by people who haven't read the patents, wording close to patent
+  language, and pasted claims taken from patents outside the index (so the answer isn't the
+  query's own source). The best ranking may differ by type, so results are reported per type,
+  not only overall.
+- **Human judges.** Two people with patent experience grade each pooled result 0–2, blind to
+  method and rank, and their agreement is measured; an AI grader runs alongside only as a
+  cross-check. This removes check 2's main weakness.
+- **Pooling deep enough for recall.** The top 20 from each method are pooled for grading.
+  Missing prior art is the costly failure (Part 2), so recall@20 is reported next to nDCG@10.
+- **Tuning kept apart from testing.** The fusion's settings, and weights between the two
+  methods, are chosen on a separate fifth of the queries, never on the test set.
+- **A decision rule fixed in advance.** Combined becomes the default only if it is better than
+  semantic overall, with a 95% bootstrap interval that excludes zero, and not clearly worse on
+  any query type. If the types disagree (for example, keywords win on pasted claims), the
+  default follows the query: pasted claims start in keyword or combined mode, descriptions in
+  semantic mode.
+- **The model in the same harness.** A patent-trained embedding model can be tested with the
+  same queries and judges, since check 1 suggests part of the gap is the general-purpose model.
+
+**Cost, roughly:** 100 queries with about 25 pooled patents each is about 2,500 judgements per
+judge, around 20 hours at 30 seconds each. That is why it is a planned experiment rather than
+part of this submission.
+
 ## Structured filtering and retrieval performance
 
 The brief calls this *hybrid search*: semantic retrieval combined with strict constraints. The
@@ -520,8 +565,9 @@ docker-compose.yml    PostgreSQL for the proof of concept
 - HNSW was measured up to 75,018 passages. Filtered searches still use exact search, so their
   time keeps growing with the index; at Part 2's scale the filters run inside OpenSearch.
 - Processing was not made faster on a CPU; only a GPU changes that (Part 3).
-- Planned next: a choice of ranking (semantic, keyword or combined), backed by the checks
-  above (D18). Deferred: fuzzy title
+- What I would add: a choice of ranking (semantic, keyword or combined), with the default
+  chosen by a human-judged test ([details](#what-i-would-use-to-improve-search-quality)).
+  Deferred: fuzzy title
   matching, links that open the patent at the matching passage, and a "related by meaning"
   section after strict results (D15).
 
