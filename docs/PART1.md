@@ -67,7 +67,8 @@ searching the words by meaning, or dropping one filter.
    abstract, each claim, and each description paragraph. 640 patents become 34,551 pieces,
    about 54 per patent. Cleaning fixes problems measured in the data: claim numbers rebuilt
    after cancelled claims, numerals glued to words separated, fragments under five words
-   dropped, and every piece fitted to the model's 256-token input limit.
+   dropped, and every piece fitted to the model's 256-token input limit (a token is roughly a word or part
+   of one).
 2. **Build the index** (`src/build_index.py`). Each piece is turned into a 384-number vector
    with `sentence-transformers/all-MiniLM-L6-v2`, so pieces with similar meaning get similar
    vectors. The model is pinned to one exact version (`src/model.py`), so a later update
@@ -281,6 +282,8 @@ takes about 10 to 11 ms end to end. Starting the CLI adds a one-off 13 s to load
 ### What I used to make it efficient
 
 - **Lookup tables built once,** so a filter is a few set operations instead of reading text.
+- **A date range found with two binary searches** over patents sorted by publication date, instead
+  of checking every patent on every search.
 - **Each patent's pieces stored as one contiguous block,** so the eligible pieces are found by
   slicing, not by scanning all 34,551.
 - **The filtering method chosen by selectivity,** with the 8% threshold taken from measurements

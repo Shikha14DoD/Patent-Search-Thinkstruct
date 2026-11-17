@@ -11,9 +11,9 @@ database and to search it, improve both, and record the improvements.
 **Why I picked efficiency and large data.**
 - **It is measured, not judged.** Every result is a time or an agreement with exact search, so
   nothing depends on manual grading.
-- **It is where a real system breaks first.** [Part 1](PART1.md) has about 10^3 patents; about 10^7 are filed
-  every year. Before anything else, a deployment has to know how processing and search behave as
-  the data grows.
+- **It is where a real system breaks first.** [Part 1](PART1.md) has about a thousand patents; the [Part 2](PART2.md)
+  design targets 10 million. A deployment has to know how processing and search behave as the
+  data grows.
 - **It tests [Part 2](PART2.md)'s design.** It replaces Part 2's estimates (passages per patent, embedding
   rate) with measurements on real data; the measured 147 passages per patent now feeds Part 2's
   cost section.
@@ -42,7 +42,7 @@ All timings are on the same 8-core Windows laptop as [Part 1](PART1.md). Identic
 | Complete build from scratch, 20 patents (2,903 passages) | 141.8 s, of which 122.9 s embedding (about 23 passages a second) |
 | Rebuild of the 75,018-passage index when embeddings are cached | 39 s (25 s loading, 12.7 s HNSW graph) |
 | All 471,000 patents on this laptop | about 26 days |
-| 10^7 patents a year | 1.47 billion passages a year: 47 a second around the clock, twice this laptop's rate |
+| 10 million patents (the Part 2 target), embedded within a year | 1.47 billion passages at 147 each: 47 a second around the clock, twice this laptop's rate |
 
 ## Processing: four attempts, none adopted
 

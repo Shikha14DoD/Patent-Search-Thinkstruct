@@ -68,95 +68,127 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
 
 ## The three parts at a glance
 
-| Part | What was built | Headline result | Full write-up |
-|---|---|---|---|
-| 1. Search engine | Semantic search over every claim and paragraph, with strict filters and the matching passage shown as evidence | A filtered search costs about the same as an unfiltered one (2.1–3.2 ms against 2.48 ms); the obvious way of filtering (rank everything, then discard) was 2–9× slower | [docs/PART1.md](docs/PART1.md) |
-| 2. At scale | A design for 10 million patents and a working ingestion proof of concept | Two workers never take the same job, a crashed worker's job is finished by another, failed jobs are retried and nothing is stored twice, all shown on the real weekly files | [docs/PART2.md](docs/PART2.md) |
-| 3. Efficiency and large data | Processing and search measured on the large dataset, then improved | Searches without filters 2.7–3.4× faster at 75,018 passages (5.8× in the scaling test), returning the same results as exact search | [docs/PART3.md](docs/PART3.md) |
+| Part | What was built | Why | Key finding from running it | Full write-up |
+|---|---|---|---|---|
+| 1. Search engine | Semantic search over every claim and paragraph, with strict filters and the matching passage shown as evidence | A whole patent is too long to count as evidence, and a patent that fails a filter must never appear | A filtered search costs about the same as an unfiltered one (2.1–3.2 ms against 2.48 ms); the obvious way of filtering was 2–9× slower | [docs/PART1.md](docs/PART1.md) |
+| 2. At scale | A design for 10 million patents, and a working ingestion proof of concept | Reliable ingestion is where a large system fails first, so that is the part I built and tested | Two workers never take the same job, a crashed worker's job is finished by another, and nothing is stored twice (641 unique patents) | [docs/PART2.md](docs/PART2.md) |
+| 3. Enhancement picked: **efficiency and large data** | Processing and search measured on the large dataset, then improved | The result is measured, not judged; it is where a real system breaks first; and it tests Part 2's estimates with real numbers | Searches without filters 2.7–3.4× faster at 75,018 passages (5.8× in the scaling test), with the same results; no CPU speed-up for processing, so a GPU is the lever | [docs/PART3.md](docs/PART3.md) |
 
 ## Part 1: semantic search with strict filters
 
-- **Search by meaning, with evidence.** 640 patents are split into 34,551 passages (the abstract,
-  each claim, each description paragraph). A query can be a description, a pasted claim or a
-  patent ID (similar patents), and every result shows the claim or paragraph that matched.
-- **Strict filters combined with meaning-based search.** Filter by classification code prefix,
-  title and abstract keywords, exact title and publication date. A patent that fails a filter
-  never appears, and when nothing matches, the engine says which filter caused it and suggests
-  fixes. Filters stay cheap because the index keeps a lookup table from each word and
-  classification code to the patents that contain it, and a date range is found with two binary
-  searches over patents sorted by date, instead of checking every patent on every search. A
-  command-line tool (CLI) and a simple browser page use the same engine.
-- **Messy data handled, not dropped.** Many claims had lost their printed number, so numbers are
-  rebuilt (96.7% of "according to claim N" references now point to the right claim). Every passage
-  is cut to fit the model's 256-token reading limit (a token is roughly a word or part of one),
-  and every patent is kept.
-- **Timed with and without filters.** Three ways of applying a filter were compared (filter
-  first, score everything and hide the rest, or rank first and discard afterwards). The engine
-  picks the fastest one depending on how many passages the filter leaves, so filtered searches
-  cost about the same as unfiltered ones.
-- **An unexpected finding, followed up.** When the query used the patent's own wording, keyword
-  ranking (BM25) beat the semantic model: it put the right patent first 86.5% of the time against
-  52.4%. When the query used everyday wording, semantic search did better. Semantic search
-  stays the default; combining the two is the next candidate.
+**How the code addresses the problem statement**
 
-**[Read the full Part 1 write-up →](docs/PART1.md)** What the engine does and how it works, data
-cleaning, the two search-quality checks and what I would add, the filtering benchmark and
-efficiency commentary, and full run instructions.
+- **The same idea in different words:** `src/build_index.py` turns every passage into an embedding
+  (a list of numbers, so similar *meaning* ends up close together), and `src/search.py` embeds the
+  query and returns the closest patents. A query can be a description, a pasted claim or a patent
+  ID.
+- **A whole patent is not evidence:** 640 patents are split into 34,551 passages (the abstract,
+  each claim, each description paragraph; `src/load_data.py`). Every result shows the passages
+  that matched, labelled as claim or paragraph. Lost claim numbers are rebuilt (96.7% of
+  "according to claim N" references resolve) and every passage fits the model's 256-token limit.
+- **Strict filters:** classification code prefix, title and abstract keywords, exact title and
+  publication date are applied *before* ranking in `src/search.py`, so a patent that fails a filter
+  never appears. When nothing matches, the engine says which filter caused it and suggests fixes.
+  A command-line tool (`src/cli.py`) and a browser page (`app.py`) use the same engine.
+
+**What I found when running it**
+
+- **The data is messier than it looks.** 119 of 640 patents have no description text, and 20,819 of
+  42,040 description paragraphs are blank. Blank paragraphs are skipped, and those patents stay
+  searchable through their title, abstract and claims.
+- **The obvious way of filtering is slow.** Ranking everything and then discarding was 2–9× slower
+  than no filter. I compared three methods and the engine picks the fastest one by how many
+  passages the filter leaves (the switch is near 8%), so filtered searches cost 2.1–3.2 ms against
+  2.48 ms unfiltered.
+- **Keyword ranking beat meaning-based ranking on one test.** When the query reused the patent's own
+  wording, keyword ranking (BM25) put the right patent first 86.5% of the time against 52.4%. On
+  everyday wording, semantic search did better (8 of 12 test needs; a small, AI-graded test).
+  Semantic search stays the default; combining the two is the next candidate.
+
+**[Read the full Part 1 write-up →](docs/PART1.md)** Details of each finding:
+[data problems](docs/PART1.md#missing-and-malformed-data),
+[search quality](docs/PART1.md#search-quality) and
+[filtering benchmark](docs/PART1.md#structured-filtering-and-retrieval-performance), plus how
+the index is built and how to run it.
 
 ## Part 2: implementation at scale
 
-- **A design a new engineer could start building from:** Amazon S3 (file storage) holds the
-  original files; PostgreSQL (a database) tracks each job and its status; worker programs process
-  the jobs; OpenSearch (a search engine) provides keyword search, compressed vectors and filters
-  in one place; and a FastAPI service (a web API) answers queries. The design also covers cost,
-  failure handling, open challenges and a build order.
-- **Decisions settled by measurement:** every passage is embedded, because 64% of top results
-  matched on a description paragraph (so skipping descriptions would lose evidence); OpenSearch
-  is used rather than PostgreSQL alone, because keyword ranking proved essential in [Part 1](docs/PART1.md).
-- **Cost:** about $7,400 a month in an illustrative AWS scenario at 54 passages per patent, or
-  about $16,500 at the 147 per patent measured in [Part 3](docs/PART3.md). A one-off embedding of every passage
-  costs about $31–188 on "spot" GPUs (spare cloud GPUs rented at a discount).
-- **Proof of concept:** a small working version of the ingestion pipeline: PostgreSQL in Docker
-  with register, worker and status commands, run on the 64 weekly files. Two workers never take
-  the same job, a crashed worker's job is finished by another, failed jobs are retried, nothing
-  is stored twice, and bad records are set aside with their reason. 10 tests.
+**How the design and code address the problem statement**
 
-**[Read the full Part 2 summary →](docs/PART2.md)** How to run the proof of concept and what to
-expect; the design itself is in [docs/PART2_DESIGN.md](docs/PART2_DESIGN.md).
+- **The design** ([docs/PART2_DESIGN.md](docs/PART2_DESIGN.md)) takes Part 1's search to 10 million
+  patents: Amazon S3 (file storage) holds the original files, PostgreSQL tracks each job and its
+  status, workers process the jobs, OpenSearch provides keyword search, compressed vectors and
+  filters in one place, and a FastAPI service answers queries. About $7,400 a month in an
+  illustrative AWS scenario (about $16,500 at the 147 passages per patent measured in
+  [Part 3](docs/PART3.md)), plus a one-off $31–188 to embed everything on spot GPUs.
+- **The code** (`poc/`) builds the hardest part to get right, reliable ingestion, in miniature:
+  `register.py` creates one job per file, `worker.py` claims jobs safely with a lease and retries
+  failures, and `status.py` reports what the pipeline holds. It runs PostgreSQL in Docker on the
+  64 weekly files and has 10 automated tests.
+
+**What I found when running it** (66 jobs: the 64 weekly files plus 2 deliberately bad files)
+
+- **Normal run:** 64 jobs complete; the corrupt file failed once, with its error, instead of being
+  retried; the file with bad records saved 1 and set aside 3, each with its reason. In total 641
+  unique patents.
+- **A worker crashed mid-job:** I stopped worker A with Ctrl+C. Worker B finished the other jobs
+  and took A's job once its 30-second lease ran out.
+- **Temporary errors:** with every job made to fail once, each completed on its second attempt.
+- **Two workers at once:** 35 and 31 jobs, no job processed twice, and the final counts were
+  identical to the single-worker run, so nothing was stored twice.
+- **Settled by measurement in the design:** every passage is embedded, because 64% of top results
+  matched on a description paragraph; OpenSearch is used rather than PostgreSQL alone, because
+  keyword ranking proved essential in [Part 1](docs/PART1.md).
+
+**[Read the full Part 2 summary →](docs/PART2.md)** See
+[what I saw when I ran it](docs/PART2.md#what-i-saw-when-i-ran-it) for the full results, and the
+[design](docs/PART2_DESIGN.md) for the architecture, cost and build order.
 
 ## Part 3: efficiency on the large dataset
 
-The enhancement I picked: measure how long it takes to process the large dataset (or a portion of
-it) into the database and to search it, improve both, and record the improvements. Here "the
-database" is [Part 1](docs/PART1.md)'s search index (the passage vectors and filter tables); "processing" means
-splitting patents into passages and embedding them.
+**The enhancement I picked: efficiency and large data.** Measure how long it takes to process the
+large dataset (or a portion of it) into the database and to search it, improve both, and record
+the improvements. ("The database" is [Part 1](docs/PART1.md)'s search index; "processing" means
+splitting patents into passages and embedding them.)
 
-**Why I picked efficiency and large data.**
+**Why I picked it.**
 - **It is measured, not judged.** Every result is a time, or how closely the faster search agrees
   with exact search, so nothing depends on someone grading results by hand.
-- **It is where a real system breaks first.** [Part 1](docs/PART1.md) has about a thousand patents; the [Part 2](docs/PART2.md)
-  design targets 10 million. Before anything else, a deployment has to know how processing and
-  search behave as the data grows.
-- **It tests [Part 2](docs/PART2.md)'s design.** It replaces Part 2's estimates (such as passages per patent and
-  embedding speed) with measurements on real data; the measured 147 passages per patent now feeds
-  Part 2's cost section.
+- **It is where a real system breaks first.** [Part 1](docs/PART1.md) has about a thousand
+  patents; the [Part 2](docs/PART2.md) design targets 10 million. A deployment has to know how
+  processing and search behave as the data grows.
+- **It tests [Part 2](docs/PART2.md)'s design.** It replaces estimates (such as passages per patent
+  and embedding speed) with measurements on real data; the measured 147 passages per patent now
+  feeds Part 2's cost section.
 
-- **Processing, measured:** turning text into embeddings is 99.5% of the build time. The large
-  data averages 147 passages per patent, so all ~471,000 patents would take about 26 days on a
-  laptop CPU. Four ways of speeding this up were each tested on a complete build and none was
-  faster, so the real lever is a GPU (a graphics chip suited to this work).
-- **Search, improved:** searches without filters now use an HNSW index (a shortcut map, see the
-  terms above) and then re-score the best patents exactly. Searches ran 2.7–3.4× faster at 75,018
-  passages, growing to 5.8× in a test where the index size was increased step by step. Recall@10
-  was 99–100% (almost always the same top 10 as exact search) and the evidence passages shown
-  were identical. Searches with filters keep exact search.
+**How the code addresses the problem statement**
+
+- **Measuring:** `benchmarks/profile_large.py`, `embed_speed.py`, `build_ab.py`,
+  `search_large.py` and `search_scaling.py` time the build and the search on the large dataset.
+  `src/load_data.py` samples it evenly (`--data data/patent_data_large:300`) and loads it defensively.
+- **Improving search:** `src/build_index.py` builds an HNSW index (a shortcut map, see the terms
+  above) once the index is large enough, and `src/search.py` uses it for searches without filters,
+  then re-scores the best patents exactly.
+
+**What I found when running it** (940 patents, 75,018 passages)
+
+- **Processing is all embedding.** Turning text into embeddings is 99.5% of the build time. The
+  large data averages 147 passages per patent, so all ~471,000 patents would take about 26 days
+  on a laptop CPU.
+- **Four speed-ups, none adopted.** Each was tested on a complete build, and none was faster. One
+  looked 1.3–1.4× faster in a small test but 0.99× in a real build. The real lever is a GPU.
+- **Search got faster.** Searches without filters now use an HNSW index (a shortcut map, see the
+  terms above) and then re-score the best patents exactly: 2.7–3.4× faster, growing to 5.8× as
+  the index grew, with recall@10 of 99–100% and the same evidence passages.
+- **Filtered searches stay exact.** Forcing the faster index to work with filters dropped recall to
+  as low as 33%, so the speed-up is not worth it there.
 - **Data problems caught:** a stray file that silently dropped patents, and 38% of the
-  classification codes (in the sample checked) written as the text "N/A", which are now treated
-  as missing.
+  classification codes sampled written as the text "N/A", now treated as missing.
 
-**[Read the full Part 3 write-up →](docs/PART3.md)** What "the database" means here, the
-processing measurements and the four attempts, the search results and scaling table, and how to
-run every benchmark.
+**[Read the full Part 3 write-up →](docs/PART3.md)** Details:
+[processing measured](docs/PART3.md#processing-measured),
+[the four attempts](docs/PART3.md#processing-four-attempts-none-adopted) and
+[search improved](docs/PART3.md#search-improved), plus how to run every benchmark.
 
 ## Engineering highlights
 
