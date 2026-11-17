@@ -36,10 +36,10 @@ The connection string can be changed with `POC_DATABASE_URL`.
 
 | Guarantee | Try this | You should see |
 |---|---|---|
-| Same file twice → one job | Run the `register` command again | `0 new job(s) queued, 66 already registered.` |
-| Two workers share the work | Start `python -m poc.worker --name A --slow 0.2` and `--name B --slow 0.2` in two terminals | Each job processed by exactly one of them |
-| A crashed worker's job is retried | Start `python -m poc.worker --name A --slow 1`, press Ctrl+C mid-job, then start `--name B` | B waits for A's 30-second lease to expire, then finishes the job: `attempt 2 … (previous: lease of A expired)` |
-| Temporary errors are retried | `python -m poc.worker --fail-on-attempt 1` on fresh jobs | `retry_wait (next try in 5 s)`, then `complete` on attempt 2 |
+| Same file twice → one job | Run the `register` command again | Each file listed as `already registered`, ending with `0 new job(s) queued, 66 already registered.` |
+| Two workers share the work | Start `python -m poc.worker --name A --slow 0.2` and `--name B --slow 0.2` in two terminals, started within a second or two of each other | Each job appears under only one worker (in a run, one window showed the odd-numbered jobs and the other the even-numbered ones, 66 in all) |
+| A crashed worker's job is retried | Start `python -m poc.worker --name A --slow 1`, press Ctrl+C mid-job, then start `--name B` | A prints `stopped mid-job`. B works through the other jobs, and once A's 30-second lease has run out it takes the abandoned one: `job 1 attempt 2 … (previous: lease of A expired)` |
+| Temporary errors are retried | `python -m poc.worker --fail-on-attempt 1` on fresh jobs | Every normal job prints `retry_wait (next try in 5 s)`, the worker prints `waiting: …`, then each job completes on attempt 2. The corrupt file is not retried: it fails once |
 | A broken file fails, without pointless retries | Part of the normal run | `patents_ipa991230_corrupt.json` is `failed` after 1 attempt, with the JSON error |
 | Bad records are kept out, the rest saved | Part of the normal run | `complete_with_errors (1 saved, 3 quarantined)`, each reason listed by `status` |
 | The same patent again is not duplicated | Copy a weekly file under a new name, register it, run a worker | `complete (10 unchanged)`; the patent count doesn't change |
@@ -57,7 +57,7 @@ The connection string can be changed with `POC_DATABASE_URL`.
   kept as a `conflict`, never overwritten.
 
   In production the search index is a second system that can't share this transaction, which is
-  why the design also relies on idempotent writes and reconciliation (design, sections 5.5 and 7).
+  why the design also relies on idempotent writes and reconciliation (design, sections 5.6 and 7).
 - **Retries:** a temporary error moves the job to `retry_wait` with a growing delay (5 s, then 20 s);
   after 3 attempts it is `failed`. A file that isn't valid JSON fails at once.
 

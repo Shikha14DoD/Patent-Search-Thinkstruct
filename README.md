@@ -240,17 +240,30 @@ All the search options, and the output to expect, are in
 This part needs **Docker Desktop** installed and running. It does not need the index from Part 1,
 only the 64 data files from Step 0.
 
-1. **Start the database** (PostgreSQL in Docker), then wait a few seconds for it to start:
-   ```
-   docker compose up -d
-   ```
+1. **Start the database.** Part 2 keeps its job list in PostgreSQL, a database. Docker runs it for
+   you in a ready-made container, so you do **not** install PostgreSQL yourself.
+   - Install **Docker Desktop**, open it, and wait until it says it is running.
+   - Then start the database:
+     ```
+     docker compose up -d
+     ```
+     This reads `docker-compose.yml`, downloads PostgreSQL 16.6 the first time (a minute or two),
+     and starts it in the background. It uses user `poc`, password `poc` and database
+     `patents_poc`, on port 5433 (not the usual 5432, so it cannot clash with a PostgreSQL you
+     already have). The Part 2 scripts connect with these settings automatically.
+   - Check that it is ready:
+     ```
+     docker compose ps
+     ```
+     The status should say `healthy`. If it says `starting`, wait a few seconds and run it again.
 2. **Reset it and register the files.** Registering creates one job per file. The `poc/fixtures`
    folder adds two deliberately bad files to show how errors are handled:
    ```
    python -m poc.db reset
    python -m poc.register data/patent_data_small poc/fixtures
    ```
-3. **Run a worker.** It claims the jobs one at a time and processes them:
+3. **Run a worker.** It claims the jobs one at a time and processes them, printing one line for
+   each job:
    ```
    python -m poc.worker
    ```
@@ -259,8 +272,29 @@ only the 64 data files from Step 0.
    python -m poc.status --jobs
    ```
    You should see 64 jobs `complete`, the corrupt file `failed`, the file with bad records
-   `complete_with_errors` (3 records set aside), and 641 unique patents.
-5. **When you are finished,** stop the database with `docker compose down`.
+   `complete_with_errors` (3 records set aside), and 641 unique patents. (The 32,146 passages it
+   reports are counted before long texts are split to fit the model's token limit, so the number
+   is lower than Part 1's 34,551.)
+5. **Try the failure cases (optional).** These are the guarantees Part 2 is about. For each one,
+   first get fresh jobs with the two commands from step 2, then:
+   - **Registering the same files twice makes no duplicate jobs.** Run the `register` command
+     again (you do not need fresh jobs for this one). Each file is listed as
+     `already registered`, and the last line is `0 new job(s) queued, 66 already registered.`
+   - **Two workers share the work.** Open two PowerShell windows, activate the virtual
+     environment in both, and start one worker in each, a second or two apart:
+     `python -m poc.worker --name A --slow 0.2` and `python -m poc.worker --name B --slow 0.2`.
+     Each job appears under only one of them (typically one window shows the odd-numbered jobs
+     and the other the even-numbered ones). Afterwards, `python -m poc.status` still shows
+     641 unique patents.
+   - **A crashed worker's job is finished by another.** Run
+     `python -m poc.worker --name A --slow 1`. As soon as it prints `job 1 attempt 1`, press
+     **Ctrl+C**; it prints `stopped mid-job`. Then run `python -m poc.worker --name B`. B works
+     through the other jobs, and about 30 seconds after A stopped (when A's lease runs out) it
+     takes job 1 and prints `job 1 attempt 2 … (previous: lease of A expired)`.
+   - **A temporary error is retried.** Run `python -m poc.worker --fail-on-attempt 1`. Every job
+     prints `retry_wait (next try in 5 s)`, the worker prints `waiting: …`, and then each job
+     completes on attempt 2. The corrupt file is not retried; it fails once, with the JSON error.
+6. **When you are finished,** stop the database with `docker compose down`.
 
 To see each guarantee demonstrated (two workers sharing jobs, a crashed worker being taken over,
 retries, no duplicates), follow [poc/README.md](poc/README.md#what-each-guarantee-looks-like).
