@@ -21,22 +21,17 @@ words, so you never need to open the log to follow the page.
 
 ## How to run this project
 
-1. **Install.** You need Python 3.12 or newer. Create a virtual environment and install the
-   packages with `pip install -r requirements.txt` (exact commands in [How to run](#how-to-run)).
-2. **Add the data.** The patent data supplied with the assignment is not in this repository, so
-   copy it in yourself: the 64 weekly JSON files go in `data/patent_data_small/` (Parts 1 and 2),
-   and the large dataset goes in `data/patent_data_large/` (Part 3 only).
-3. **Run the part you want to look at.** Each part has its own step-by-step instructions, with
-   the output to expect:
-   - **Part 1, search:** build the index (about 20 minutes), then search from the command line or
-     the browser page. Steps: [How to run Part 1](docs/PART1.md#how-to-run-part-1).
-   - **Part 2, proof of concept:** needs Docker for PostgreSQL. Steps:
-     [Part 2 page](docs/PART2.md) (short version) and
-     [poc/README.md, "Run it"](poc/README.md#run-it) (each guarantee shown one by one).
-   - **Part 3, speed on the large dataset:** builds a larger index, then runs the benchmarks.
-     Steps: [How to run Part 3](docs/PART3.md#how-to-run-part-3).
+Do **Step 0** once, then run any of the three parts. Each part is a short numbered list in
+[How to run](#how-to-run) further down this page:
 
-All three sets of commands are also collected in one place under [How to run](#how-to-run) below.
+1. [Step 0: set up](#step-0-set-up-once): install Python packages and add the data.
+2. [Part 1: build the index and search](#part-1-build-the-index-and-search)
+3. [Part 2: run the ingestion proof of concept](#part-2-run-the-ingestion-proof-of-concept) (needs Docker)
+4. [Part 3: measure speed on the large dataset](#part-3-measure-speed-on-the-large-dataset)
+
+Each part's own page has the same steps with more explanation and the output to expect:
+[Part 1](docs/PART1.md#how-to-run-part-1), [Part 2](docs/PART2.md) and
+[poc/README.md](poc/README.md#run-it), [Part 3](docs/PART3.md#how-to-run-part-3).
 
 ## Terms used on this page
 
@@ -179,32 +174,128 @@ run every benchmark.
 
 ## How to run
 
-Full instructions, with expected output and timings: [Part 1](docs/PART1.md#how-to-run-part-1)
-and [Part 3](docs/PART3.md#how-to-run-part-3). The short version, on Windows PowerShell (Python
-3.12 or newer):
+Run every command from the **top folder of the repository** (the folder that contains
+`README.md`). The commands below are for Windows PowerShell; the macOS and Linux differences are
+noted where they matter.
 
-```
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+### Step 0: Set up (once)
 
-# Part 1: put the 64 weekly JSON files in data/patent_data_small/, then
-python -m src.build_index --data data/patent_data_small --out index
-python -m src.cli "sensor that detects a flat tire while driving"
-python -m src.cli "wheel rim" --classification B60B --top 5
-streamlit run app.py
-python benchmarks/timing.py            # filtered vs unfiltered speed
-python evaluation/self_retrieval.py    # search-quality check
-python -m pytest tests -q              # automated tests
+1. **Check your Python version.** You need Python 3.12 or newer:
+   ```
+   python --version
+   ```
+2. **Create a virtual environment and install the packages.** This takes a few minutes and about
+   3 GB of disk space, because PyTorch is large:
+   ```
+   python -m venv .venv
+   .venv\Scripts\Activate.ps1
+   python -m pip install -r requirements.txt
+   ```
+   On macOS or Linux, use `python3 -m venv .venv` and `source .venv/bin/activate` instead.
+   A Hugging Face warning about "unauthenticated requests" is harmless.
+3. **Add the data.** The patent data supplied with the assignment is not stored in this
+   repository. Create the folder `data/patent_data_small/` and put the **64 weekly JSON files**
+   in it, directly inside the folder. Each file holds about 10 patents, which makes the **640
+   patents** used in Parts 1 and 2 (64 files, 640 patents).
 
-# Part 3: put the large dataset in data/patent_data_large/, then
-python -m src.build_index --data data/patent_data_small data/patent_data_large:300 --out index_large
-python benchmarks/search_large.py --index index_large
-python benchmarks/search_scaling.py --index index_large
-```
+You only need to do Step 0 once. After that, pick a part below.
 
-Building the [Part 1](docs/PART1.md) index takes about 20 minutes on a laptop CPU. macOS and Linux commands, the
-[Part 2](docs/PART2.md) proof of concept and the other [Part 3](docs/PART3.md) benchmarks are in the full write-ups.
+### Part 1: build the index and search
+
+1. **Build the index.** This reads the 64 files, splits the patents into passages and embeds
+   them. It takes about **20 minutes** on a laptop CPU:
+   ```
+   python -m src.build_index --data data/patent_data_small --out index
+   ```
+   It should finish with `index written to index/`. A line near the end should say
+   `units longer than the model's 256-token limit: 0`.
+2. **Run a search from the command line:**
+   ```
+   python -m src.cli "sensor that detects a flat tire while driving"
+   ```
+   You get the best-matching patents, each with the claim or paragraph that matched.
+3. **Add filters** to narrow the results:
+   ```
+   python -m src.cli "wheel rim" --classification B60B --top 5
+   python -m src.cli "tire pressure sensor" --published-from 2025 --sort newest
+   ```
+4. **Or use the browser page** (it does the same searches, with the filters in a side panel):
+   ```
+   streamlit run app.py
+   ```
+5. **Optional checks.** Each prints what it found; the tests need no data:
+   ```
+   python benchmarks/timing.py            # filtered vs unfiltered speed (a few minutes)
+   python evaluation/self_retrieval.py    # search-quality check (about a minute)
+   python -m pytest tests -q              # automated tests
+   ```
+   Without Docker running, 62 tests pass and 10 are skipped; those 10 belong to Part 2 and run
+   once PostgreSQL is up (see Part 2).
+
+All the search options, and the output to expect, are in
+[docs/PART1.md](docs/PART1.md#how-to-run-part-1).
+
+### Part 2: run the ingestion proof of concept
+
+This part needs **Docker Desktop** installed and running. It does not need the index from Part 1,
+only the 64 data files from Step 0.
+
+1. **Start the database** (PostgreSQL in Docker), then wait a few seconds for it to start:
+   ```
+   docker compose up -d
+   ```
+2. **Reset it and register the files.** Registering creates one job per file. The `poc/fixtures`
+   folder adds two deliberately bad files to show how errors are handled:
+   ```
+   python -m poc.db reset
+   python -m poc.register data/patent_data_small poc/fixtures
+   ```
+3. **Run a worker.** It claims the jobs one at a time and processes them:
+   ```
+   python -m poc.worker
+   ```
+4. **See the result:**
+   ```
+   python -m poc.status --jobs
+   ```
+   You should see 64 jobs `complete`, the corrupt file `failed`, the file with bad records
+   `complete_with_errors` (3 records set aside), and 641 unique patents.
+5. **When you are finished,** stop the database with `docker compose down`.
+
+To see each guarantee demonstrated (two workers sharing jobs, a crashed worker being taken over,
+retries, no duplicates), follow [poc/README.md](poc/README.md#what-each-guarantee-looks-like).
+The design itself is in [docs/PART2_DESIGN.md](docs/PART2_DESIGN.md).
+
+### Part 3: measure speed on the large dataset
+
+Do **Step 0** first, and ideally build the Part 1 index too, because Part 3 reuses its embeddings.
+
+1. **Add the large dataset.** Create `data/patent_data_large/` and unzip the large dataset into
+   it. The batch files can stay in their subfolders; every `patents*.json` file is found.
+2. **Build the larger index.** It uses the 640 Part 1 patents plus 300 patents sampled evenly
+   from the large dataset (940 patents, 75,018 passages). About 40 minutes the first time, under
+   a minute once embeddings are cached:
+   ```
+   python -m src.build_index --data data/patent_data_small data/patent_data_large:300 --out index_large
+   ```
+3. **Measure search speed.** These two give the main Part 3 result (searches without filters 2.7–3.4×
+   faster, and how the speed-up grows with index size). About 5 minutes in total:
+   ```
+   python benchmarks/search_large.py --index index_large
+   python benchmarks/search_scaling.py --index index_large
+   ```
+4. **Measure processing speed (optional).** These show where build time goes and the four speed-ups
+   that were tried; together they take about 30 minutes:
+   ```
+   python benchmarks/profile_large.py --data data/patent_data_large
+   python benchmarks/embed_speed.py --data data/patent_data_large
+   python benchmarks/build_ab.py --data data/patent_data_large:20 --before 64:1 --after 64:4
+   ```
+
+Each benchmark writes its result to `benchmarks/large/`, replacing the committed file. Times
+depend on your machine, but the speed-ups and the agreement with exact search should match.
+The time of each command and what it measures is in
+[docs/PART3.md](docs/PART3.md#how-to-run-part-3).
 
 ## Repository layout
 
