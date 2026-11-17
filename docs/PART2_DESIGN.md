@@ -1,6 +1,6 @@
 # Part 2: Running the patent search at 10 million patents
 
-> **What this is.** A system design that extends Part 1 to 10 million patents, plus a small
+> **What this is.** A system design that extends [Part 1](PART1.md) to 10 million patents, plus a small
 > proof of concept (PoC) of its ingestion pipeline. The design is a proposal: nothing here has
 > been deployed or load-tested at 10 million patents. Figures marked *measured* come from
 > Part 1's 640-patent sample; everything else is labelled as an assumption or an illustrative
@@ -11,13 +11,13 @@
 A researcher enters an invention description or a claim, optionally narrows the results by
 classification prefix, title words, abstract words or an exact title, and gets ranked patent
 publications, each with the original passages that matched. Similar-patent search by patent ID
-(Part 1's `--similar-to`) and exact lookups must work without running the model. Similarity is
+([Part 1](PART1.md)'s `--similar-to`) and exact lookups must work without running the model. Similarity is
 research help, not a legal conclusion.
 
 | Property | Value | Status |
 |---|---|---|
 | Corpus | 10 million patent publications | **Given** by the brief |
-| Response | Top 10 publications, up to 3 matching passages each; filters always strict | Carried over from Part 1 |
+| Response | Top 10 publications, up to 3 matching passages each; filters always strict | Carried over from [Part 1](PART1.md) |
 | Load | 20 searches per second as a load-test scenario; p95 under 1 second as a goal | **Assumption**: real usage is unknown |
 | Freshness | A new batch searchable within 24 hours of arriving | **Assumption** |
 | Hosting | AWS, used only to price the design | **Assumption**: any cloud works |
@@ -26,7 +26,7 @@ research help, not a legal conclusion.
 
 ## 2. Sizing, from Part 1's measurements
 
-Part 1's sample has 640 patents in 64 weekly files. Its per-patent figures scale linearly to
+[Part 1](PART1.md)'s sample has 640 patents in 64 weekly files. Its per-patent figures scale linearly to
 10 million, assuming the same mix of patents.
 
 | Quantity | Per patent (measured) | At 10 million patents |
@@ -72,7 +72,7 @@ flowchart LR
 |---|---|---|
 | **S3** | Original files, unchanged; normalized passages | The source of truth. Any index can be rebuilt from it, and every transformation can be checked against the original |
 | **PostgreSQL** | Job queue, patent versions, per-record outcomes, counts, active index version | Transactions make claiming jobs and recording results safe. One small database, easy to inspect |
-| **Workers** | Parse and clean with Part 1's loader, embed, write to OpenSearch | Run independently of searches. CPU workers for weekly batches; temporary GPU workers for the backfill |
+| **Workers** | Parse and clean with [Part 1](PART1.md)'s loader, embed, write to OpenSearch | Run independently of searches. CPU workers for weekly batches; temporary GPU workers for the backfill |
 | **OpenSearch** | BM25 keyword search, vector search and filters, in one engine | Distributed, so it scales by adding nodes. A derived index, not the source of truth |
 | **FastAPI** | Authenticates, validates filters, embeds the query, runs both searches, merges them, returns passages | Stateless, so more copies can be added behind a load balancer when traffic needs it |
 
@@ -84,7 +84,7 @@ it.
 
 ### 4.1 Why both keyword and semantic search
 
-Part 1 measured both on the same passages (README, *Search quality*). With the claim as the query,
+[Part 1](PART1.md) measured both on the same passages (README, *Search quality*). With the claim as the query,
 BM25 found the right patent first 86.5% of the time against 52.4% for semantic search. With
 everyday-language queries, semantic search scored higher (nDCG@10 0.475 against 0.335), most
 clearly when the query and the patent shared few words. Each fails where the other works, so the
@@ -96,10 +96,10 @@ Each patent is one OpenSearch document. Patent-level fields (ID, title, abstract
 prefixes, publication date, jurisdiction, language, version) sit at the top; each passage
 (type, label, original text, vector) is a **nested** object inside it.
 
-This layout gives Part 1's behaviour directly:
+This layout gives [Part 1](PART1.md)'s behaviour directly:
 
 - **Ranked by best passage.** For nested vector search, OpenSearch uses each patent's nearest
-  passage to decide whether to include it, which is Part 1's "rank each patent by its best
+  passage to decide whether to include it, which is [Part 1](PART1.md)'s "rank each patent by its best
   passage". BM25 over nested passages does the same with `score_mode: max`.
 - **Evidence comes back with the result.** `inner_hits` returns the passages that matched, so the
   API never fetches text from anywhere else.
@@ -114,7 +114,7 @@ builds a new index anyway (section 6). Large patents with hundreds of passages m
 writes, which the ingestion workers absorb by batching.
 
 **A hard limit:** OpenSearch allows at most 10,000 nested objects per document by default
-(`index.mapping.nested_objects.limit`). Part 1's sample is far below it (median 46 passages per
+(`index.mapping.nested_objects.limit`). [Part 1](PART1.md)'s sample is far below it (median 46 passages per
 patent, 99th percentile 233, largest 362), but a very long patent elsewhere could exceed it. The
 worker checks the passage count before writing: a patent over the limit is split into several
 documents of up to 5,000 passages, each carrying the patent fields and a part number, and the API
@@ -141,11 +141,11 @@ setting m = 16.
 | Claims and abstracts only | 178M | ~34 GB | A description paragraph that shares no words with the query | ~$4,770 |
 | Three selected passages per patent | 30M | ~6 GB | The same, plus most claims; and "selected" needs a rule | ~$4,630 |
 
-**Why every passage:** missing relevant prior art is the costly failure in this field, and Part 1's
+**Why every passage:** missing relevant prior art is the costly failure in this field, and [Part 1](PART1.md)'s
 paraphrase test showed semantic search matters most exactly where the wording differs from the
 patent. It is also Part 1's design unchanged.
 
-**Measured on Part 1's 12 benchmark queries** (semantic search over the 640 patents, run once over
+**Measured on [Part 1](PART1.md)'s 12 benchmark queries** (semantic search over the 640 patents, run once over
 all passages and once with description paragraphs removed):
 
 - In 64% of top-10 results, the best-matching passage was a **description paragraph**.
@@ -167,7 +167,7 @@ claims and abstracts only is the next step down. Three passages per patent saves
 
 For `"adaptive battery cooling"` with classification prefix `H01M`:
 
-1. The API authenticates the request, validates the filters, and embeds the query once (Part 1
+1. The API authenticates the request, validates the filters, and embeds the query once ([Part 1](PART1.md)
    measured about 8 ms on CPU).
 2. **Keyword search:** BM25 over the nested passages, filtered to `H01M`, best passage per patent,
    top 200 patents.
@@ -176,14 +176,14 @@ For `"adaptive battery cooling"` with classification prefix `H01M`:
    pass, which is the same crossover Part 1 measured), top 200 patents.
 4. **Merge** the two patent lists with reciprocal rank fusion, `score = Σ 1/(60 + rank)`. This is
    a starting point, not a proven choice: on Part 1's tests it was never far from the better
-   method but never clearly the best (D18). Each list's results are logged separately so the
+   method but never clearly the best ([Part 1's search-quality checks](PART1.md#search-quality)). Each list's results are logged separately so the
    merge can be judged and changed.
 5. Return the top 10 patents with up to 3 matching passages each from `inner_hits`, plus the index,
    model and ranking versions used.
 6. If the filters match nothing, return an empty result with Part 1's suggestions. Filters are
    never loosened silently.
 
-**Why merge both when Part 1 defaults to semantic search?** Part 1 kept semantic search as its
+**Why merge both when [Part 1](PART1.md) defaults to semantic search?** Part 1 kept semantic search as its
 default because its main input is a plain-language description, where Part 1's paraphrase test
 favoured it. A production system also gets the other kind of query: attorneys paste claim
 language, where BM25 found the right patent first 86.5% of the time against 52.4%. Merging was never
@@ -193,7 +193,7 @@ search wins on descriptions and BM25 on claims, the API should route by query ty
 merging; if merging loses to semantic search overall, it is dropped.
 
 **Similar to a patent ID** looks up that patent's stored abstract and first-claim vectors and runs
-step 3 with the patent excluded, as in Part 1, with no model needed. **Exact title or ID lookups**
+step 3 with the patent excluded, as in [Part 1](PART1.md), with no model needed. **Exact title or ID lookups**
 are plain filter queries.
 
 ### 4.5 Limits of this search design
@@ -201,7 +201,7 @@ are plain filter queries.
 - **Approximate search can miss neighbours.** Compression plus rescoring keeps most of the recall,
   but not all of it. The pilot must measure recall against exact search on a sample.
 - **RRF is untested at scale.** Both lists are kept and logged so the merge can be replaced.
-- **The model is general-purpose.** Part 1 showed it is weaker than BM25 when the wording matches.
+- **The model is general-purpose.** [Part 1](PART1.md) showed it is weaker than BM25 when the wording matches.
   A model change means re-embedding everything (section 6).
 - **The four OpenSearch features are untested together.** Nested vector fields, disk-based
   compression, filters on patent-level fields inside a nested vector search, and `inner_hits` are
@@ -219,7 +219,7 @@ are plain filter queries.
 record each patent's outcome → embed passages not seen before → bulk-write to OpenSearch →
 check every write → mark the job done → update status`
 
-Embedding skips any passage whose exact text was embedded before by the same model (Part 1's
+Embedding skips any passage whose exact text was embedded before by the same model ([Part 1](PART1.md)'s
 embedding cache, keyed by model and text).
 
 ### 5.2 Records in PostgreSQL
@@ -299,7 +299,7 @@ success.
 A publication is identified by **jurisdiction + publication number + kind code**, for example
 `US` `20240051333` `A1`. The number alone is not enough: a corrected publication (kind `A9`) or a
 later grant (`B1`, `B2`) can reuse the number but is a different document, and must not be mistaken
-for a duplicate of the original or overwrite it. Part 1's sample already contains 4 `A9` corrections
+for a duplicate of the original or overwrite it. [Part 1](PART1.md)'s sample already contains 4 `A9` corrections
 among 640 publications. Within one identity, the **content hash** separates genuine revisions from
 exact repeats. Related publications (an application and its correction or grant) are linked by
 jurisdiction and number, so a search can show them together.
@@ -332,7 +332,7 @@ jurisdiction and number, so a search can show them together.
   cache is keyed by model as well as text, so it can't help), at the backfill's cost (section 8.3).
   A new cleaning rule re-embeds only the passages whose text changed.
 - **Either way, a new index version is built next to the live one.** It is checked (counts, sample
-  queries, the Part 1 evaluation), then an alias switches searches to it with no downtime. Both
+  queries, the [Part 1](PART1.md) evaluation), then an alias switches searches to it with no downtime. Both
   versions are held until the new one is trusted, so the cluster needs room for two indexes for a
   while.
 - **Every response records** the index, model and ranking versions, so a past result can be
@@ -425,7 +425,7 @@ patents. Each change, on its own:
 | Two replicas instead of one (higher availability) | 314 GB of vector memory: 7 nodes, 8 TB disk | ~$2,200 |
 | The keyword index expands 6× instead of 3× | 8 TB disk (vector memory unchanged) | ~$240 |
 
-**Measured since (Part 3):** the large dataset averages **147 passages per patent**. Sized the same
+**Measured since ([Part 3](PART3.md)):** the large dataset averages **147 passages per patent**. Sized the same
 way (1.47 billion passages, 569 GB of vector memory with a replica: 12 data nodes, 15 TB of disk),
 the monthly total is **about $16,500**, close to the 140-passage row above. That is the realistic
 figure; $7,370 shows the method at the small sample's average.
@@ -444,14 +444,14 @@ validated configuration.
 `passages ÷ (passages per second per GPU) ÷ 3,600 × price per GPU-hour`, plus bulk indexing time.
 
 GPU throughput for this model on these passages hasn't been measured, so the estimate is a range.
-Part 3 measured about 35 passages a second on a laptop CPU; GPUs are commonly 10–50× faster, so this
+[Part 3](PART3.md) measured about 35 passages a second on a laptop CPU; GPUs are commonly 10–50× faster, so this
 assumes 500–3,000 passages a second on one NVIDIA T4 (`g4dn.xlarge`: $0.526/hour on-demand, about
 $0.23/hour as a spot instance, us-east-1).
 
 | Passages | GPU-hours | Spot cost | On-demand cost |
 |---|---:|---:|---:|
 | 540 million (54 per patent, this design's base) | 50–300 | ~$11–69 | ~$26–158 |
-| 1.47 billion (147 per patent, measured in Part 3) | 136–817 | ~$31–188 | ~$72–430 |
+| 1.47 billion (147 per patent, measured in [Part 3](PART3.md)) | 136–817 | ~$31–188 | ~$72–430 |
 
 **The embedding itself is cheap:** even the high end is less than a day of the search cluster. The
 real costs of a backfill are the cluster time while 1.47 billion vectors are bulk-indexed, and, for a
@@ -464,7 +464,7 @@ measures the real throughput first.
 | Challenge | Response |
 |---|---|
 | **Memory for 540 million vectors** | Compressed disk-based vectors (section 4.3), with two cheaper fallbacks priced. Watch k-NN memory and add nodes before it fills |
-| **Recall** | Approximate search and RRF can both lose relevant patents. Measure recall against exact search on a sample, and keep running Part 1's evaluation on each index version |
+| **Recall** | Approximate search and RRF can both lose relevant patents. Measure recall against exact search on a sample, and keep running [Part 1](PART1.md)'s evaluation on each index version |
 | **Keeping Postgres and OpenSearch consistent** | At-least-once processing with idempotent writes, per-item checks, leases, and reconciliation that creates repair jobs |
 | **Data quality at scale** | Part 1's problems (lost claim numbers, empty paragraphs, text over the token limit) will appear across the corpus, so the cleaning rules run in the workers and their counts are reported per job |
 | **Re-embedding after a model change** | Versioned indexes avoid downtime and the embedding cache skips unchanged text, but a new model still means re-embedding all 540 million passages |
@@ -481,19 +481,19 @@ concurrent load.
 | 2 | Original files in S3, registered on arrival | A new file creates exactly one job |
 | 3 | OpenSearch index with nested passages and BM25 | Keyword search with filters returns patents and passages |
 | 4 | Embedding workers and the vector field | Semantic search works; counts reconcile |
-| 5 | FastAPI with both searches and RRF | Part 1's queries return comparable results |
+| 5 | FastAPI with both searches and RRF | [Part 1](PART1.md)'s queries return comparable results |
 | 6 | Index versions, alias switching, status endpoint | A rebuild switches with no downtime |
 | 7 | Pilot at 1%, then the backfill | The section 9 measurements are in hand |
 
 ## 11. Proof of concept: reliable ingestion
 
 **What it shows:** the parts of the design that are hardest to get right: claiming jobs safely,
-retries, crash recovery, no duplicates, quarantine, and status. It runs on Part 1's real data.
+retries, crash recovery, no duplicates, quarantine, and status. It runs on [Part 1](PART1.md)'s real data.
 
 **What it doesn't show:** OpenSearch, embeddings, or anything about 10-million-patent performance.
 
 **Setup:** PostgreSQL in Docker (`docker-compose.yml`); the Python code runs in the project's
-virtual environment and reuses Part 1's parsing and cleaning. Inputs are the 64 weekly files, plus
+virtual environment and reuses [Part 1](PART1.md)'s parsing and cleaning. Inputs are the 64 weekly files, plus
 one hand-made file with a malformed record.
 
 **Planned demonstration:**
@@ -508,7 +508,7 @@ one hand-made file with a malformed record.
 
 **How to run it:** see [`poc/README.md`](../poc/README.md).
 
-**Result on Part 1's data,** with worker A stopped mid-job (Ctrl+C) and worker B started
+**Result on [Part 1](PART1.md)'s data,** with worker A stopped mid-job (Ctrl+C) and worker B started
 afterwards:
 
 ```text
@@ -538,12 +538,12 @@ same ID is a `conflict`, a lease expiring on the final attempt fails the job, an
 can't finish a job it lost.
 
 **Patent identity in the PoC:** the PoC keys patents by publication number and content hash, which
-is unique in Part 1's sample (its 4 `A9` corrections don't share a number with any `A1`). A
+is unique in [Part 1](PART1.md)'s sample (its 4 `A9` corrections don't share a number with any `A1`). A
 correction that did share a number would be stored as a `conflict`, kept and flagged, never merged or
 overwritten; production adds jurisdiction and kind code to the key (section 5.5).
 
 **Passages** here are counted before splitting to the model's token limit (abstract + claims +
-description paragraphs), so the figure differs from Part 1's 34,551 units.
+description paragraphs), so the figure differs from [Part 1](PART1.md)'s 34,551 units.
 
 ## 12. Future scope: other countries and languages
 
@@ -572,13 +572,13 @@ ones. Publication dates stay per office, so a date filter can still say "publish
 | **Separate index per language** | Each language gets its own keyword analyser and model | Simple to reason about, but cross-language search needs merging results from several indexes |
 
 I would test the first option on a small sample before buying anything: embed a few thousand
-patents in two languages with a multilingual model, then run Part 1's checks (find a patent from
+patents in two languages with a multilingual model, then run [Part 1](PART1.md)'s checks (find a patent from
 its own claim, then a human-judged set of everyday-language queries) and compare with the current
 English-only model. Keyword ranking also needs a per-language analyser, because BM25 depends on
 splitting text into words correctly, which differs by language.
 
 **4. The same invention is filed in many countries.** Results would fill with near-copies of one
-invention (a patent family). Part 1 already flags identical abstracts (decision D20), and section
+invention (a patent family). [Part 1](PART1.md) already flags patents with identical abstracts as possibly the same family ([reasoning](../DECISIONS.md#d20-find-patents-similar-to-a-given-patent-id)), and section
 5.5 keeps each publication as its own document. Across countries I would group documents by
 family identifier when the source provides one, show one entry per family, and list the other
 countries beside it. Whether grouping helps recall or hurts it is another thing to measure.

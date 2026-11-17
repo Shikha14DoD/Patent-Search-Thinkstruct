@@ -98,9 +98,9 @@ efficiency commentary, and full run instructions.
   failure handling, open challenges and a build order.
 - **Decisions settled by measurement:** every passage is embedded, because 64% of top results
   matched on a description paragraph (so skipping descriptions would lose evidence); OpenSearch
-  is used rather than PostgreSQL alone, because keyword ranking proved essential in Part 1.
+  is used rather than PostgreSQL alone, because keyword ranking proved essential in [Part 1](docs/PART1.md).
 - **Cost:** about $7,400 a month in an illustrative AWS scenario at 54 passages per patent, or
-  about $16,500 at the 147 per patent measured in Part 3. A one-off embedding of every passage
+  about $16,500 at the 147 per patent measured in [Part 3](docs/PART3.md). A one-off embedding of every passage
   costs about $31–188 on "spot" GPUs (spare cloud GPUs rented at a discount).
 - **Proof of concept:** a small working version of the ingestion pipeline: PostgreSQL in Docker
   with register, worker and status commands, run on the 64 weekly files. Two workers never take
@@ -114,16 +114,16 @@ expect; the design itself is in [docs/PART2_DESIGN.md](docs/PART2_DESIGN.md).
 
 The enhancement I picked: measure how long it takes to process the large dataset (or a portion of
 it) into the database and to search it, improve both, and record the improvements. Here "the
-database" is Part 1's search index (the passage vectors and filter tables); "processing" means
+database" is [Part 1](docs/PART1.md)'s search index (the passage vectors and filter tables); "processing" means
 splitting patents into passages and embedding them.
 
 **Why I picked efficiency and large data.**
 - **It is measured, not judged.** Every result is a time, or how closely the faster search agrees
   with exact search, so nothing depends on someone grading results by hand.
-- **It is where a real system breaks first.** Part 1 has about a thousand patents; the Part 2
+- **It is where a real system breaks first.** [Part 1](docs/PART1.md) has about a thousand patents; the [Part 2](docs/PART2.md)
   design targets 10 million. Before anything else, a deployment has to know how processing and
   search behave as the data grows.
-- **It tests Part 2's design.** It replaces Part 2's estimates (such as passages per patent and
+- **It tests [Part 2](docs/PART2.md)'s design.** It replaces Part 2's estimates (such as passages per patent and
   embedding speed) with measurements on real data; the measured 147 passages per patent now feeds
   Part 2's cost section.
 
@@ -184,8 +184,8 @@ python benchmarks/search_large.py --index index_large
 python benchmarks/search_scaling.py --index index_large
 ```
 
-Building the Part 1 index takes about 20 minutes on a laptop CPU. macOS and Linux commands, the
-Part 2 proof of concept and the other Part 3 benchmarks are in the full write-ups.
+Building the [Part 1](docs/PART1.md) index takes about 20 minutes on a laptop CPU. macOS and Linux commands, the
+[Part 2](docs/PART2.md) proof of concept and the other [Part 3](docs/PART3.md) benchmarks are in the full write-ups.
 
 ## Repository layout
 
@@ -261,11 +261,11 @@ In short:
 - **One ingestion job per source per publication day.** Patent offices publish on different days:
   the European Patent Office every Wednesday, while the weekly US files in this data are dated
   Thursdays. With several sources something new arrives most days, so the weekly build becomes a
-  daily check that embeds only the new passages and adds them to the live index. Part 2's job
+  daily check that embeds only the new passages and adds them to the live index. [Part 2](docs/PART2.md)'s job
   queue already treats every batch as an independent job, so a new source is a new job type.
 - **Record country and language on every patent**, and add filters for both (the fields are already
-  in the Part 2 design).
-- **Test a multilingual embedding model first**, on a small sample, with the same checks as Part 1,
+  in the [Part 2](docs/PART2.md) design).
+- **Test a multilingual embedding model first**, on a small sample, with the same checks as [Part 1](docs/PART1.md),
   before re-embedding anything. Translating to English at ingestion and keeping one index per
   language are the alternatives, with their costs compared in the design. Keyword ranking also
   needs a per-language word splitter.

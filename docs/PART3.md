@@ -2,31 +2,34 @@
 
 [← Back to the README](../README.md)
 
+Every design choice is written up in the [decision log](../DECISIONS.md), with its evidence and the
+options rejected. This page states each reason in plain words.
+
 The brief: measure how long it takes to process the large dataset (or a portion of it) into the
 database and to search it, improve both, and record the improvements.
 
 **Why I picked efficiency and large data.**
 - **It is measured, not judged.** Every result is a time or an agreement with exact search, so
   nothing depends on manual grading.
-- **It is where a real system breaks first.** Part 1 has about 10^3 patents; about 10^7 are filed
+- **It is where a real system breaks first.** [Part 1](PART1.md) has about 10^3 patents; about 10^7 are filed
   every year. Before anything else, a deployment has to know how processing and search behave as
   the data grows.
-- **It tests Part 2's design.** It replaces Part 2's estimates (passages per patent, embedding
+- **It tests [Part 2](PART2.md)'s design.** It replaces Part 2's estimates (passages per patent, embedding
   rate) with measurements on real data; the measured 147 passages per patent now feeds Part 2's
   cost section.
 
-**What "the database" is here.** Part 1's search index: passage vectors plus filter lookup
+**What "the database" is here.** [Part 1](PART1.md)'s search index: passage vectors plus filter lookup
 tables, written by `build_index`. Processing means splitting patents into passages and embedding
-them. PostgreSQL only tracks ingestion status in Part 2, so it is not on this path.
+them. PostgreSQL only tracks ingestion status in [Part 2](PART2.md), so it is not on this path.
 
 **Data.** The large sample is 471 batch files of about 1,000 patents each (about 471,000
 patents, 30.7 GB). The index used here takes 300 patents spread evenly across the files, plus
-Part 1's 640: **940 patents, 75,018 passages**, 2.2 times Part 1. Loading it surfaced two data
+[Part 1](PART1.md)'s 640: **940 patents, 75,018 passages**, 2.2 times Part 1. Loading it surfaced two data
 problems, now handled: a stray non-batch file (`sample.json`) that silently dropped patents, and
 38% of classifications written as the text "N/A", now treated as missing so no filter matches
 them.
 
-All timings are on the same 8-core Windows laptop as Part 1. Identical runs varied by up to 45%
+All timings are on the same 8-core Windows laptop as [Part 1](PART1.md). Identical runs varied by up to 45%
 (the laptop slows as it heats), so build comparisons use a warm-up run, alternate the order
 (A, B, B, A) and average.
 
@@ -35,7 +38,7 @@ All timings are on the same 8-core Windows laptop as Part 1. Identical runs vari
 | Measure | Result |
 |---|---|
 | Share of build time spent embedding | **99.5%** (loading and filter tables are the rest) |
-| Passages per patent | 147 on average (median 107, 90th percentile 271), against 54 in Part 1 |
+| Passages per patent | 147 on average (median 107, 90th percentile 271), against 54 in [Part 1](PART1.md) |
 | Complete build from scratch, 20 patents (2,903 passages) | 141.8 s, of which 122.9 s embedding (about 23 passages a second) |
 | Rebuild of the 75,018-passage index when embeddings are cached | 39 s (25 s loading, 12.7 s HNSW graph) |
 | All 471,000 patents on this laptop | about 26 days |
@@ -53,8 +56,8 @@ on a complete build with identical results.
 | Batch 16 instead of 64 | 1.3–1.4× faster on 1,000 passages in random order, but **0.99×** in a real build | The build sorts passages by length, so batches have almost no padding left to save |
 | 4 embedding processes, one thread each | **0.85×** in a real build (embedding alone 1.19×, within noise) | Each process loads its own model, and one PyTorch process already uses every core |
 
-So on a CPU, embedding is limited by raw compute, and the defaults stay as in Part 1 (batch 64,
-one process). The lever is a GPU: Part 2 costs a one-off embedding of every passage at $31–188 on
+So on a CPU, embedding is limited by raw compute, and the defaults stay as in [Part 1](PART1.md) (batch 64,
+one process). The lever is a GPU: [Part 2](PART2.md) costs a one-off embedding of every passage at $31–188 on
 spot GPUs ([design, section 8.3](PART2_DESIGN.md)).
 
 ## Search: improved
@@ -63,7 +66,7 @@ Exact search scores every passage, so its time grows in step with the index. The
 builds an **HNSW graph** (FAISS, `M=32`, `efConstruction=128`) automatically for 50,000 vectors
 or more, and uses it for searches **without filters**. It fetches candidate passages, widening
 until it has 10 patents, then **rescores the top 30 patents exactly**, so scores and evidence
-passages match exact search. Searches with any filter keep Part 1's exact path: forcing HNSW
+passages match exact search. Searches with any filter keep [Part 1](PART1.md)'s exact path: forcing HNSW
 there dropped recall to as low as 60% with a broad filter and 33% with a narrow one. A graph that
 no longer matches the index is detected rather than used.
 
@@ -71,7 +74,7 @@ Unfiltered search on 940 patents, 75,018 passages (median of 20 repeats):
 
 | Query set | Retrieval: exact → HNSW (ms) | Complete query (ms) | Recall@10 | Same evidence |
 |---|---:|---:|---:|---:|
-| Part 1's 12 vehicle queries | 7.06 → 2.61 (**2.7×**) | 42.5 → 29.2 (1.5×) | 100% | 100% |
+| [Part 1](PART1.md)'s 12 vehicle queries | 7.06 → 2.61 (**2.7×**) | 42.5 → 29.2 (1.5×) | 100% | 100% |
 | 8 queries from other fields | 5.39 → 1.59 (**3.4×**) | 21.4 → 15.8 (1.4×) | 99% (min 90%) | 100% |
 
 The complete query gains less because it includes embedding the query, which HNSW doesn't change.
@@ -86,14 +89,14 @@ Filtered searches run at the same speed as before (0.8–1.2×) with 100% recall
 | 470 | 37,562 | 2.61 | 0.79 | 3.3× | 100% (100%) |
 | 940 | 75,018 | 4.77 | 0.82 | **5.8×** | 99% (90%) |
 
-Exact time roughly doubles each time the index doubles; HNSW barely moves. That is why Part 2 uses an
+Exact time roughly doubles each time the index doubles; HNSW barely moves. That is why [Part 2](PART2.md) uses an
 approximate vector index in OpenSearch.
 
 ## How to run Part 3
 
 Run every command from the repository's top folder.
 
-Set up Part 1 first (install, and ideally build its index, whose embeddings are reused). Then
+Set up [Part 1](PART1.md) first (install, and ideally build its index, whose embeddings are reused). Then
 unzip the large dataset into `data/patent_data_large/`. Its batch files can stay in their
 subfolders: every `patents*.json` file below that folder is read, and any other file is ignored.
 
@@ -120,5 +123,5 @@ every time (fixed seed).
 
 Each benchmark overwrites its committed result file, so `git diff benchmarks/large/` shows how a
 new run compares. Absolute times depend on the machine; the speed-ups and the recall and
-same-evidence checks are what should reproduce. Decisions D21 to D25 in
-[`DECISIONS.md`](../DECISIONS.md) explain each choice.
+same-evidence checks are what should reproduce. The [decision log](../DECISIONS.md#d21-sample-the-large-dataset-evenly-and-load-it-defensively) records each
+choice above with its evidence and the options rejected.

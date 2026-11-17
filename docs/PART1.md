@@ -4,6 +4,9 @@
 
 This page holds the full Part 1 write-up: what the engine does, how it works, how the data was
 cleaned, how search quality was checked, how filtering was timed, and how to run everything.
+Every design choice is written up in the [decision log](../DECISIONS.md), with its evidence and the
+options rejected. This page states each reason in plain words; links labelled *reasoning* open
+the full entry.
 
 ## What it does
 
@@ -23,9 +26,9 @@ Quoted words inside a filter (`'"wheel hub"'`) must appear together as a phrase.
 combine with AND, and they are strict: a patent that fails one never appears.
 
 **Dates are publication dates.** The data has no filing or priority dates, only the weekly
-publication date in each file's name (D3), so the filter says "published". In prior-art work
+publication date in each file's name ([reasoning](../DECISIONS.md#d3-the-weekly-date-is-the-publication-date-not-the-filing-date)), so the filter says "published". In prior-art work
 the useful cut-off is "published before my priority date", which `--published-to` gives.
-The large dataset's file names carry no dates, so its patents never pass a date filter (D26).
+The large dataset's file names carry no dates, so its patents never pass a date filter ([reasoning](../DECISIONS.md#d26-a-publication-date-filter-and-newest-first-ordering)).
 
 **Order:** results are ranked by score. `--sort newest` shows the same best matches newest
 first; it reorders them, it does not fetch the newest patents overall. With no query, filtered
@@ -48,10 +51,10 @@ from:
 **Similar to a patent:** `--similar-to US20240051333A1` finds the patents closest to one already
 in the dataset, using its abstract and first claim as the query. The patent itself is never
 returned, every filter still applies, and no model is loaded, so it answers in a few
-milliseconds. Patents with the very same abstract are flagged as possibly the same family (D20).
+milliseconds. Patents with the very same abstract are flagged as possibly the same family ([reasoning](../DECISIONS.md#d20-find-patents-similar-to-a-given-patent-id)).
 Only patents in the dataset can be used; an unknown ID gets "not in this index" and the closest
 IDs that are. Fetching outside patents (the brief's scraper idea) was left out on purpose: a
-reliable local engine mattered more than a scraper that breaks when a website changes (D15).
+reliable local engine mattered more than a scraper that breaks when a website changes ([reasoning](../DECISIONS.md#d15-scope-what-was-deliberately-not-built)).
 
 **When filters leave nothing,** the engine says which filter matched nothing and suggests
 changes that would return patents, each with its count and a command to run it: likely
@@ -77,7 +80,7 @@ searching the words by meaning, or dropping one filter.
 Why pieces rather than whole patents: the model reads 256 tokens and a patent with a
 description has a median of 4,195, so whole-patent vectors would judge each patent by its
 first page. Pieces make every claim searchable and let the result show exactly what matched
-(decision D8).
+([reasoning](../DECISIONS.md#d8-search-passages-rank-each-patent-by-its-best-passage)).
 
 ### Missing and malformed data
 
@@ -89,8 +92,9 @@ repeats the title, number and year found in other fields.
 No field is missing outright, but 20,819 of 42,040 description paragraphs are empty strings
 and 119 patents have no description text at all. **Every patent is kept;** blank paragraphs are
 skipped, and patents without a description stay searchable through their title, abstract and
-claims (D1). Other data problems found and fixed are listed in `DECISIONS.md` (D2 to D7). The
-weekly date in the file names is the A1 **publication** date, not the filing date (D3).
+claims ([reasoning](../DECISIONS.md#d1-keep-every-patent-skip-blank-description-paragraphs)). Other data problems found and fixed (lost claim numbers, text too long for the model, and
+others) are each written up with evidence in the [decision log](../DECISIONS.md#d2-take-claim-numbers-from-the-printed-number-never-from-list-position). The
+weekly date in the file names is the A1 **publication** date, not the filing date ([reasoning](../DECISIONS.md#d3-the-weekly-date-is-the-publication-date-not-the-filing-date)).
 
 "Description para N" in results is the Nth non-blank paragraph of the description in this
 dataset. The source has no official paragraph numbers, so N can differ from the `[00NN]`
@@ -160,13 +164,13 @@ check 1 it can't be reproduced from here.
 - **Combining the two is never far from the best.** It nearly tied semantic search on everyday
   language, scored highest on patent terminology, and sat between the two on check 1. That makes
   it the natural next candidate for the default, but the gains are small, so it needs a larger,
-  human-judged test before it's adopted (D18).
+  human-judged test before it's adopted ([reasoning](../DECISIONS.md#d18-measure-search-quality-with-two-complementary-checks-keep-semantic-ranking-as-the-default)).
 
 ### What I would use to improve search quality
 
 The checks point to a product decision that isn't built yet: **no single ranking is best for
 every query.** A researcher who pastes a claim uses the patent's own wording, where keywords win;
-one who describes an idea in everyday words is better served by meaning. Part 2's design already
+one who describes an idea in everyday words is better served by meaning. [Part 2](PART2.md)'s design already
 ranks with both combined. To improve search quality, I would let the user choose the ranking,
 and pick the default with a test designed to settle it.
 
@@ -192,7 +196,7 @@ users without telling them when each mode helps.
   method and rank, and their agreement is measured; an AI grader runs alongside only as a
   cross-check. This removes check 2's main weakness.
 - **Pooling deep enough for recall.** The top 20 from each method are pooled for grading.
-  Missing prior art is the costly failure (Part 2), so recall@20 is reported next to nDCG@10.
+  Missing prior art is the costly failure ([Part 2](PART2.md)), so recall@20 is reported next to nDCG@10.
 - **Tuning kept apart from testing.** The fusion's settings, and weights between the two
   methods, are chosen on a separate fifth of the queries, never on the test set.
 - **A decision rule fixed in advance.** Combined becomes the default only if it is better than
@@ -213,9 +217,9 @@ part of this submission.
   invention can take several places in a top 10: a similar-patent search returned a
   same-abstract twin at 0.985. Showing one entry per family ("+1 version with the same
   abstract") would give those places to different patents, which matters because missing
-  prior art is the costly failure. The same-abstract flag (D20) is the starting point; only 26
+  prior art is the costly failure. The same-abstract flag ([reasoning](../DECISIONS.md#d20-find-patents-similar-to-a-given-patent-id)) is the starting point; only 26
   of the 640 patents (4%) have such a twin here, so the gain grows with a corpus that includes
-  corrections and grants (Part 2 keeps those as separate documents).
+  corrections and grants ([Part 2](PART2.md) keeps those as separate documents).
 - **A landscape view.** A ranked list answers "what matches my idea?" but not "what is being
   filed in this area, and by whom?", which the brief lists as a reason to search patents.
   Grouping the relevant results by topic (clustering their vectors), classification and
@@ -280,17 +284,17 @@ takes about 10 to 11 ms end to end. Starting the CLI adds a one-off 13 s to load
 - **Each patent's pieces stored as one contiguous block,** so the eligible pieces are found by
   slicing, not by scanning all 34,551.
 - **The filtering method chosen by selectivity,** with the 8% threshold taken from measurements
-  on two machines (it moved between them, so it is a tuned value, D12).
+  on two machines (it moved between them, so it is a tuned value; [reasoning](../DECISIONS.md#d12-choose-the-filtering-method-by-how-many-units-survive)).
 - **Exact search as one matrix multiplication** on normalised vectors: at about 2 ms, an
-  approximate index would add complexity and lose recall for no visible gain (D9).
+  approximate index would add complexity and lose recall for no visible gain ([reasoning](../DECISIONS.md#d9-all-minilm-l6-v2-with-exact-search-in-numpy)).
 - **An embedding cache** keyed by model and exact text: after a cleaning change, a rebuild
-  re-embeds only the changed pieces, about 5 minutes instead of 20 (D10).
+  re-embeds only the changed pieces, about 5 minutes instead of 20 ([reasoning](../DECISIONS.md#d10-cache-embeddings-by-model-and-exact-text)).
 
 ### What changes at large scale
 
 At 10 million patents the same design means about 540 million passages at this sample's 54 per
-patent, or 1.47 billion at the 147 per patent measured on the large dataset (Part 3), and exact
-search would take from tens of seconds to over a minute per query. Part 2 designs the system for that size:
+patent, or 1.47 billion at the 147 per patent measured on the large dataset ([Part 3](PART3.md)), and exact
+search would take from tens of seconds to over a minute per query. [Part 2](PART2.md) designs the system for that size:
 OpenSearch for keyword search, compressed vector search and filters in one engine; PostgreSQL to
 track every file and patent through ingestion; GPU workers for the one-off embedding. See
 [Part 2](PART2.md).
@@ -368,7 +372,7 @@ prints them whole, and `python -m src.cli --help` lists every option.
 
 **Or in a browser:** `streamlit run app.py` opens a simple page with the same search, filters,
 similar-patent search and evidence passages. It is a convenience over the same engine, not the
-Part 3 interface option. The model loads once, so searches after the first take milliseconds
+[Part 3](PART3.md) interface option. The model loads once, so searches after the first take milliseconds
 instead of paying the CLI's 13 s start-up each time.
 
 ### 5. Reproduce the timings
@@ -401,5 +405,5 @@ python -m pytest tests -q
 72 tests. 62 check the cleaning rules (claim numbering, numeral separation, token limits), the
 search (filters and their edge cases, the date filter and newest-first order, filtering
 strategies, excerpts, suggestions, similar patents), the BM25 baseline, the self-retrieval ranking, large-data loading and HNSW search, on
-tiny hand-made indexes; they need neither the model nor the dataset. The other 10 test the Part 2 proof of concept and need
+tiny hand-made indexes; they need neither the model nor the dataset. The other 10 test the [Part 2](PART2.md) proof of concept and need
 PostgreSQL running (`docker compose up -d`); without it they are skipped.
