@@ -75,6 +75,9 @@ from:
 in the dataset, using its abstract and first claim as the query. The patent itself is never
 returned, every filter still applies, and no model is loaded, so it answers in a few
 milliseconds. Patents with the very same abstract are flagged as possibly the same family (D20).
+Only patents in the dataset can be used; an unknown ID gets "not in this index" and the closest
+IDs that are. Fetching outside patents (the brief's scraper idea) was left out on purpose: a
+reliable local engine mattered more than a scraper that breaks when a website changes (D15).
 
 **When filters leave nothing,** the engine says which filter matched nothing and suggests
 changes that would return patents, each with its count and a command to run it: likely
@@ -103,6 +106,11 @@ first page. Pieces make every claim searchable and let the result show exactly w
 (decision D8).
 
 ### Missing and malformed data
+
+**Fields used:** `title`, `doc_number`, `abstract`, `claims`, `detailed_description` and
+`classification`, plus `filename` for the Google Patents link; the publication date comes from
+the weekly file's name (`patents_ipa240215.json`). The `bibtex` citation isn't used: it only
+repeats the title, number and year found in other fields.
 
 No field is missing outright, but 20,819 of 42,040 description paragraphs are empty strings
 and 119 patents have no description text at all. **Every patent is kept;** blank paragraphs are
@@ -224,6 +232,22 @@ users without telling them when each mode helps.
 **Cost, roughly:** 100 queries with about 25 pooled patents each is about 2,500 judgements per
 judge, around 20 hours at 30 seconds each. That is why it is a planned experiment rather than
 part of this submission.
+
+**Two more improvements, both about grouping results:**
+
+- **Collapse patent families.** Results are individual patents, so versions of the same
+  invention can take several places in a top 10: a similar-patent search returned a
+  same-abstract twin at 0.985. Showing one entry per family ("+1 version with the same
+  abstract") would give those places to different patents, which matters because missing
+  prior art is the costly failure. The same-abstract flag (D20) is the starting point; only 26
+  of the 640 patents (4%) have such a twin here, so the gain grows with a corpus that includes
+  corrections and grants (Part 2 keeps those as separate documents).
+- **A landscape view.** A ranked list answers "what matches my idea?" but not "what is being
+  filed in this area, and by whom?", which the brief lists as a reason to search patents.
+  Grouping the relevant results by topic (clustering their vectors), classification and
+  publication month would show that. "By whom" isn't possible with this data: the records have
+  no applicant or assignee field, so it would have to be added at ingestion (Part 2's pipeline
+  is where it would come in).
 
 ## Structured filtering and retrieval performance
 
@@ -515,9 +539,11 @@ Filtered searches run at the same speed as before (0.8–1.2×) with 100% recall
 Exact time roughly doubles each time the index doubles; HNSW barely moves. That is why Part 2 uses an
 approximate vector index in OpenSearch.
 
-### How to reproduce Part 3
+### How to run Part 3
 
-Needs the large dataset in `data/patent_data_large`.
+Set up Part 1 first (install, and ideally build its index, whose embeddings are reused). Then
+unzip the large dataset into `data/patent_data_large/`. Its batch files can stay in their
+subfolders: every `patents*.json` file below that folder is read, and any other file is ignored.
 
 ```
 python -m src.build_index --data data/patent_data_small data/patent_data_large:300 --out index_large
@@ -528,8 +554,22 @@ python benchmarks/search_large.py --index index_large
 python benchmarks/search_scaling.py --index index_large
 ```
 
-`data/patent_data_large:300` takes 300 patents spread evenly across the files. Results are in
-[`benchmarks/large/`](benchmarks/large/); decisions D21 to D25 in [`DECISIONS.md`](DECISIONS.md).
+`data/patent_data_large:300` takes 300 patents spread evenly across the files, the same sample
+every time (fixed seed).
+
+| Command | Time on the laptop | Writes |
+|---|---|---|
+| `build_index` (large index) | about 40 min from scratch; under a minute when cached | `index_large/` |
+| `profile_large.py` | 6–8 min | `benchmarks/large/profile.json` |
+| `embed_speed.py` | 6–8 min | `benchmarks/large/embed_speed.json` |
+| `build_ab.py` | 12–15 min (5 complete builds) | `benchmarks/large/build_ab_workers.json` |
+| `search_large.py` | about 3 min | `benchmarks/large/search.json` |
+| `search_scaling.py` | 1–2 min | `benchmarks/large/search_scaling.json` |
+
+Each benchmark overwrites its committed result file, so `git diff benchmarks/large/` shows how a
+new run compares. Absolute times depend on the machine; the speed-ups and the recall and
+same-evidence checks are what should reproduce. Decisions D21 to D25 in
+[`DECISIONS.md`](DECISIONS.md) explain each choice.
 
 ## Repository layout
 
