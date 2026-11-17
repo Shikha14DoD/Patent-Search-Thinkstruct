@@ -13,7 +13,7 @@ reversal is part of the record.
 `benchmarks/results.md`, measured on an 8-core Windows 11 laptop with Python 3.12 and NumPy 2.5.
 Token counts use the model's own tokenizer.
 
-Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope; D18 measures search quality.
+Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D15 records scope; D18 measures search quality; D21 to D25 are Part 3 (efficiency on the large dataset, results in `benchmarks/large/`).
 
 ---
 
@@ -103,6 +103,7 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Chosen:** all-MiniLM-L6-v2: small, fast on CPU, widely used, and quick for a reviewer to reproduce. Exact search with one matrix multiplication.
 - **Rationale:** At about 2.5 ms, an approximate index would add infrastructure and a recall loss to save almost nothing, since query embedding dominates the request.
 - **Trade-offs:** The model isn't tuned for patent language. Exact search grows linearly; around a million vectors it would reach tens of milliseconds.
+- **Update (Part 3):** at 75,018 passages, unfiltered searches use an HNSW graph (D24); filtered searches keep exact search (D25).
 - **Not done, and why:** Comparing models requires a relevance metric. D18 now provides one, and shows the model is weaker than BM25 when wording matches, but a model swap is still deferred: the reproducible check favours keywords, so it can't rank models fairly on its own.
 
 ### D10. Cache embeddings by model and exact text
@@ -260,7 +261,49 @@ Decisions D1 to D7 concern the data; D8 to D14 and D16 onwards concern search; D
 - **Trade-offs:** The first claim is normally the main independent claim, but not always (it can follow cancelled claims). Only the first claim is used, so inventions whose other independent claims cover something different are represented partly.
 - **Validation:** Five unit tests: the source is never returned and no model is loaded; IDs in common shapes resolve and a near miss gives close IDs; filters apply and all four filtering methods agree; filters matching only the source say so; a patent without an abstract uses its claim. Checked by hand on the full sample for the twin, an unknown ID, an exact-title filter matching only the source, a misspelled filter, and a query given together with `--similar-to`.
 
+## D21. Sample the large dataset evenly, and load it defensively
+- **Status:** Validated
+- **Problem:** The large dataset is 471 batch files (about 471,000 patents, 30.7 GB); Part 3 allows a portion. File names carry no dates, and the first files alone could be unrepresentative.
+- **Chosen:** `folder:N` takes N patents spread evenly across every `patents*.json` file (a fixed random sample within each file, seed 0). Patent IDs are de-duplicated across folders, so Part 1's data and the large sample can be indexed together.
+- **Problems found while loading, and handled:**
+  - A stray `sample.json` (a single record, not a batch list) was silently read as zero patents; the 300-patent index had 250. Only `patents*.json` files are read now, and a file that is not a list is reported.
+  - 114 of the 300 sampled patents (38%) have the classification written as the text "N/A". It is now stored as missing, so no classification filter can match it.
+- **Validation:** Five loading tests (files in subfolders found, a limit samples across the whole dataset, folders combined without duplicates, other JSON files ignored and bad batches reported, "N/A" treated as missing). The rebuilt index reports `classification_marked_missing 114`.
+
+## D22. Profile before optimising: embedding is 99.5% of processing
+- **Status:** Validated
+- **Evidence:** `benchmarks/profile_large.py` on the large data: 99.5% of build time is embedding; the rest is loading and filter tables. Patents average 147 passages (median 107, 90th percentile 271), against 54 in Part 1, because descriptions are longer. At the laptop's rate (about 23 passages a second), all 471,000 patents would take about 26 days; 10^7 patents a year would need 47 passages a second around the clock.
+- **Consequence:** By Amdahl's law, only the embedding step is worth speeding up, so every processing attempt (D23) targets it. Faster loading or filter tables could save at most 0.5%.
+
+## D23. Keep PyTorch, batch 64 and one process: CPU speed-ups tried and rejected
+- **Status:** Validated (the defaults); the alternatives Rejected
+- **Method:** Each alternative was judged on a complete build from an empty cache (`benchmarks/build_ab.py`: a warm-up build, then A, B, B, A, averaged), with a check that the vectors are identical. Identical runs varied by up to 45% on the laptop, so smaller differences are treated as noise.
+- **Results:**
+  - **ONNX Runtime** (plain and optimised): slower than PyTorch at every batch size from 8 to 64 (`embed_speed.json`, `embed_speed_extra.json`).
+  - **8-bit ONNX:** 8.4 to 8.6 of each top 10 the same as the current model, so it changes results; rejected without a relevance measurement to justify the trade.
+  - **Batch 16:** 1.3–1.4× faster on 1,000 passages in random order, but 0.99× on a complete build (embedding 0.93×), because the build already sorts passages by length and batches have almost no padding to save (`build_ab_batch.json`). It was briefly the default; reverted when the complete build showed no gain.
+  - **4 embedding processes** (`--workers 4`, one thread each): 0.85× on a complete build; embedding alone 1.19×, within noise. Each process loads its own model, and one PyTorch process already uses every core (`build_ab_workers.json`). The option stays, default 1.
+- **Conclusion:** On a CPU, embedding is limited by raw compute. The lever is a GPU, costed in Part 2 at $31–188 on spot GPUs for a one-off embedding of every passage (`docs/PART2_DESIGN.md`, section 8.3). Not measured here, to keep Part 3 on the existing setup.
+
+## D24. HNSW for searches without filters, with exact rescoring
+- **Status:** Validated (up to 75,018 passages)
+- **Problem:** Exact search scores every passage, so its time grows in step with the index (D9).
+- **Chosen:** FAISS `IndexHNSWFlat` (`M=32`, `efConstruction=128`), built by `build_index` automatically at 50,000 vectors or more, in 12.7 s for 75,018. A search fetches 200 candidate passages, doubling until 10 distinct patents are found, then rescores the top 30 patents (3 × top 10) exactly against all their passages. A graph whose size no longer matches the index is detected and refused; a rebuild below the threshold deletes the old graph.
+- **Why rescoring:** Without it, 97% of evidence passages matched exact search, because the graph returns only some of each patent's passages. With it, the score and evidence passage of each returned patent are exact.
+- **Evidence** (940 patents, 75,018 passages, `search.json`): unfiltered retrieval 7.06 → 2.61 ms (2.7×) for Part 1's queries and 5.39 → 1.59 ms (3.4×) for 8 queries from other fields; recall@10 100% and 99% (minimum 90%); same evidence 100%. Complete query 1.4–1.5× faster, because embedding the query is unchanged. Scaling (`search_scaling.json`): 1.1× at 8,938 passages, 1.8× at 18,725, 3.3× at 37,562, 5.8× at 75,018.
+- **Trade-offs:** Approximate: a query can lose a result (minimum recall 90%). The graph adds memory and build time, and must be rebuilt when the index changes.
+
+## D25. Searches with filters stay exact
+- **Status:** Validated; the rule changed twice after measurements
+- **History:** The first rule reused Part 1's 8% threshold for HNSW and was wrong: HNSW was twice as slow at 20%. The second used HNSW when filters kept at least half the patents. Queries from other fields then showed recall of 88% (minimum 60%) even with a broad filter keeping 68% of patents, and as low as 33% with a narrow one, for at most a 1.5× gain.
+- **Chosen:** HNSW only when no filter is set (a similar-patent search, which only excludes the source patent, still uses it). Any filter uses Part 1's prefilter or mask.
+- **Evidence:** With this rule, every filtered scenario has 100% recall and runs at the same speed as before (0.8–1.2×) (`search.json`).
+- **Trade-off:** Filtered search still grows linearly with the index. At Part 2's scale, filters run inside OpenSearch's vector search instead.
+
 ## Later experiments (not yet run)
+
+Part 3 ran several of these on the large dataset: ONNX, int8, worker processes (D23) and HNSW
+(D24). The rest are still untried.
 
 Ideas for reducing each measured cost, ordered by the cost they target. None has been tried, so
 there are no predicted numbers: each would be measured with `benchmarks/timing.py` (and

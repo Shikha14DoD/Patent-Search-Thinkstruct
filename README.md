@@ -9,7 +9,8 @@ specific to vehicles: classification codes and vocabulary come from the data.
 
 Built as a take-home project for Thinkstruct. Every design choice, with the evidence behind
 it, is in [`DECISIONS.md`](DECISIONS.md). The design for 10 million patents and its proof of
-concept are in [Part 2](#part-2-10-million-patents).
+concept are in [Part 2](#part-2-10-million-patents); speed measurements and improvements on the
+large dataset are in [Part 3](#part-3-efficiency-on-the-large-dataset).
 
 ## Problem statement
 
@@ -37,6 +38,8 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
 | Filtering first was assumed to be always faster | Measured three filtering methods; picks one by how many passages survive | Benchmark below: identical results, crossover between 6% and 10% of passages |
 | Evidence must be traceable | Keeps the raw source text beside the cleaned text; marks inferred labels | Every result shows its passage, label and caveats |
 | Semantic search was assumed to beat keywords | Measured against a BM25 keyword baseline on 614 queries | Keyword search won on this test; see [Search quality](#search-quality) |
+| Exact search slows down in step with the index | HNSW graph for searches without filters, with exact rescoring of the top patents | Retrieval 2.7–3.4× faster at 75,018 passages (5.8× in the scaling test), recall 99–100%, same evidence; see [Part 3](#part-3-efficiency-on-the-large-dataset) |
+| Processing was assumed to be speedable on a CPU | Measured four alternatives end to end before changing anything | None made a real build faster, so the defaults stayed; see [Part 3](#part-3-efficiency-on-the-large-dataset) |
 
 ## What it does
 
@@ -241,8 +244,9 @@ takes about 10 to 11 ms end to end. Starting the CLI adds a one-off 13 s to load
 
 ### What changes at large scale
 
-At 10 million patents the same design means about 540 million passages and 830 GB of vectors,
-and exact search would take tens of seconds per query. Part 2 designs the system for that size:
+At 10 million patents the same design means about 540 million passages at this sample's 54 per
+patent, or 1.47 billion at the 147 per patent measured on the large dataset (Part 3), and exact
+search would take from tens of seconds to over a minute per query. Part 2 designs the system for that size:
 OpenSearch for keyword search, compressed vector search and filters in one engine; PostgreSQL to
 track every file and patent through ingestion; GPU workers for the one-off embedding. See
 [Part 2](#part-2-10-million-patents).
@@ -342,10 +346,10 @@ in Search quality exactly.
 python -m pytest tests -q
 ```
 
-56 tests. 46 check the cleaning rules (claim numbering, numeral separation, token limits), the
+67 tests. 57 check the cleaning rules (claim numbering, numeral separation, token limits), the
 search (filters and their edge cases, filtering strategies, excerpts, suggestions, similar
-patents), the BM25 baseline and the self-retrieval ranking, on tiny hand-made indexes; they need
-neither the model nor the dataset. The other 10 test the Part 2 proof of concept and need
+patents), the BM25 baseline, the self-retrieval ranking, large-data loading and HNSW search, on
+tiny hand-made indexes; they need neither the model nor the dataset. The other 10 test the Part 2 proof of concept and need
 PostgreSQL running (`docker compose up -d`); without it they are skipped.
 
 ## Part 2: 10 million patents
@@ -371,6 +375,111 @@ Expected: 64 jobs `complete`, the deliberately corrupt file `failed`, the file w
 `complete_with_errors` with 3 records quarantined, and 641 unique patents. Step-by-step
 demonstrations of each guarantee are in [`poc/README.md`](poc/README.md).
 
+## Part 3: efficiency on the large dataset
+
+The brief: measure how long it takes to process the large dataset (or a portion of it) into the
+database and to search it, improve both, and record the improvements.
+
+**Why I picked efficiency and large data.**
+- **It is measured, not judged.** Every result is a time or an agreement with exact search, so
+  nothing depends on manual grading.
+- **It is where a real system breaks first.** Part 1 has about 10^3 patents; about 10^7 are filed
+  every year. Before anything else, a deployment has to know how processing and search behave as
+  the data grows.
+- **It tests Part 2's design.** It replaces Part 2's estimates (passages per patent, embedding
+  rate) with measurements on real data; the measured 147 passages per patent now feeds Part 2's
+  cost section.
+
+**What "the database" is here.** Part 1's search index: passage vectors plus filter lookup
+tables, written by `build_index`. Processing means splitting patents into passages and embedding
+them. PostgreSQL only tracks ingestion status in Part 2, so it is not on this path.
+
+**Data.** The large sample is 471 batch files of about 1,000 patents each (about 471,000
+patents, 30.7 GB). The index used here takes 300 patents spread evenly across the files, plus
+Part 1's 640: **940 patents, 75,018 passages**, 2.2 times Part 1. Loading it surfaced two data
+problems, now handled: a stray non-batch file (`sample.json`) that silently dropped patents, and
+38% of classifications written as the text "N/A", now treated as missing so no filter matches
+them.
+
+All timings are on the same 8-core Windows laptop as Part 1. Identical runs varied by up to 45%
+(the laptop slows as it heats), so build comparisons use a warm-up run, alternate the order
+(A, B, B, A) and average.
+
+### Processing: measured
+
+| Measure | Result |
+|---|---|
+| Share of build time spent embedding | **99.5%** (loading and filter tables are the rest) |
+| Passages per patent | 147 on average (median 107, 90th percentile 271), against 54 in Part 1 |
+| Complete build from scratch, 20 patents (2,903 passages) | 141.8 s, of which 122.9 s embedding (about 23 passages a second) |
+| Rebuild of the 75,018-passage index when embeddings are cached | 39 s (25 s loading, 12.7 s HNSW graph) |
+| All 471,000 patents on this laptop | about 26 days |
+| 10^7 patents a year | 1.47 billion passages a year: 47 a second around the clock, twice this laptop's rate |
+
+### Processing: four attempts, none adopted
+
+Embedding is the only part worth speeding up, so every attempt targeted it, and each was judged
+on a complete build with identical results.
+
+| Attempt | Result | Why |
+|---|---|---|
+| ONNX Runtime instead of PyTorch (plain and optimised) | Slower at every batch size from 8 to 64 | Measured, not assumed: PyTorch was faster on this laptop |
+| 8-bit ONNX model | Changed results: 8.4 to 8.6 of each top 10 the same | Rejected: a quality trade with no relevance measurement to justify it |
+| Batch 16 instead of 64 | 1.3–1.4× faster on 1,000 passages in random order, but **0.99×** in a real build | The build sorts passages by length, so batches have almost no padding left to save |
+| 4 embedding processes, one thread each | **0.85×** in a real build (embedding alone 1.19×, within noise) | Each process loads its own model, and one PyTorch process already uses every core |
+
+So on a CPU, embedding is limited by raw compute, and the defaults stay as in Part 1 (batch 64,
+one process). The lever is a GPU: Part 2 costs a one-off embedding of every passage at $31–188 on
+spot GPUs ([design, section 8.3](docs/PART2_DESIGN.md)).
+
+### Search: improved
+
+Exact search scores every passage, so its time grows in step with the index. The engine now
+builds an **HNSW graph** (FAISS, `M=32`, `efConstruction=128`) automatically for 50,000 vectors
+or more, and uses it for searches **without filters**. It fetches candidate passages, widening
+until it has 10 patents, then **rescores the top 30 patents exactly**, so scores and evidence
+passages match exact search. Searches with any filter keep Part 1's exact path: forcing HNSW
+there dropped recall to as low as 60% with a broad filter and 33% with a narrow one. A graph that
+no longer matches the index is detected rather than used.
+
+Unfiltered search on 940 patents, 75,018 passages (median of 20 repeats):
+
+| Query set | Retrieval: exact → HNSW (ms) | Complete query (ms) | Recall@10 | Same evidence |
+|---|---:|---:|---:|---:|
+| Part 1's 12 vehicle queries | 7.06 → 2.61 (**2.7×**) | 42.5 → 29.2 (1.5×) | 100% | 100% |
+| 8 queries from other fields | 5.39 → 1.59 (**3.4×**) | 21.4 → 15.8 (1.4×) | 99% (min 90%) | 100% |
+
+The complete query gains less because it includes embedding the query, which HNSW doesn't change.
+Filtered searches run at the same speed as before (0.8–1.2×) with 100% recall.
+
+**The gain grows with the index** (unfiltered retrieval only, 12 queries):
+
+| Patents | Passages | Exact (ms) | HNSW (ms) | Speed-up | Recall@10 (min) |
+|---:|---:|---:|---:|---:|---:|
+| 118 | 8,938 | 0.51 | 0.46 | 1.1× | 100% (100%) |
+| 235 | 18,725 | 1.26 | 0.72 | 1.8× | 99% (90%) |
+| 470 | 37,562 | 2.61 | 0.79 | 3.3× | 100% (100%) |
+| 940 | 75,018 | 4.77 | 0.82 | **5.8×** | 99% (90%) |
+
+Exact time roughly doubles each time the index doubles; HNSW barely moves. That is why Part 2 uses an
+approximate vector index in OpenSearch.
+
+### How to reproduce Part 3
+
+Needs the large dataset in `data/patent_data_large`.
+
+```
+python -m src.build_index --data data/patent_data_small data/patent_data_large:300 --out index_large
+python benchmarks/profile_large.py --data data/patent_data_large
+python benchmarks/embed_speed.py --data data/patent_data_large
+python benchmarks/build_ab.py --data data/patent_data_large:20 --before 64:1 --after 64:4
+python benchmarks/search_large.py --index index_large
+python benchmarks/search_scaling.py --index index_large
+```
+
+`data/patent_data_large:300` takes 300 patents spread evenly across the files. Results are in
+[`benchmarks/large/`](benchmarks/large/); decisions D21 to D25 in [`DECISIONS.md`](DECISIONS.md).
+
 ## Repository layout
 
 ```
@@ -381,6 +490,10 @@ src/search.py         search, filters, filtering strategies, excerpts, suggestio
 src/cli.py            command-line interface
 src/bm25.py           BM25 keyword ranking, the evaluation baseline
 benchmarks/timing.py  filters-on vs filters-off benchmark
+benchmarks/*_large.py, build_ab.py, embed_speed.py, search_scaling.py
+                      Part 3: processing and search benchmarks on the large dataset
+benchmarks/large/     Part 3 results
+src/fast_embed.py     Part 3: ONNX Runtime encoder, used only by embed_speed.py
 evaluation/self_retrieval.py   automated search-quality check
 tests/                unit tests
 DECISIONS.md          decision log with evidence
@@ -398,6 +511,9 @@ docker-compose.yml    PostgreSQL for the proof of concept
 - Keyword filters match words, not synonyms; "search by meaning" covers that, across all text.
 - Patents are ranked by their single best passage; a patent with many matching passages shows
   a count but doesn't rank higher (D16).
+- HNSW was measured up to 75,018 passages. Filtered searches still use exact search, so their
+  time keeps growing with the index; at Part 2's scale the filters run inside OpenSearch.
+- Processing was not made faster on a CPU; only a GPU changes that (Part 3).
 - Planned next: a choice of ranking (semantic, keyword or combined), backed by the checks
   above (D18). Deferred: fuzzy title
   matching, links that open the patent at the matching passage, and a "related by meaning"
