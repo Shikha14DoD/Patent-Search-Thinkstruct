@@ -87,25 +87,25 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
 
 **My approach: how the code addresses the problem**
 
-- **The same idea in different words:** dense retrieval. `src/build_index.py` turns every passage
-  into an embedding (a list of numbers, so similar *meaning* ends up close together) with a
-  sentence-transformer model whose version is pinned for reproducibility. `src/search.py` embeds
-  the query and finds the closest passages by cosine similarity, computed as one matrix
-  multiplication over normalised vectors (an exact nearest-neighbour search). Embeddings are cached
-  by model and exact text, so a rebuild only re-embeds what changed. A query can be a description,
-  a pasted claim or a patent ID.
+- **The same idea in different words:** dense retrieval. When the index is built, every passage
+  is turned into an embedding (a list of numbers, so similar *meaning* ends up close together) by
+  a sentence-transformer model whose version is pinned for reproducibility. At search time the
+  query is embedded the same way, and the closest passages are found by cosine similarity,
+  computed as one matrix multiplication over normalised vectors (an exact nearest-neighbour
+  search). Embeddings are cached by model and exact text, so a rebuild only re-embeds what
+  changed. A query can be a description, a pasted claim or a patent ID.
 - **A whole patent is not evidence:** passage-level retrieval. 640 patents are split into 34,551
-  passages (the abstract, each claim, each description paragraph; `src/load_data.py`), cut by the
-  model's own token count so each fits its 256-token limit. Patents are ranked by their best
-  passage (MaxP aggregation), and every result shows the passages that matched. Lost claim numbers
-  are rebuilt (96.7% of "according to claim N" references resolve).
+  passages (the abstract, each claim, each description paragraph), cut by the model's own token
+  count so each fits its 256-token limit. Patents are ranked by their best passage (MaxP
+  aggregation), and every result shows the passages that matched. Lost claim numbers are rebuilt
+  (96.7% of "according to claim N" references resolve).
 - **Strict filters:** classification code prefix, title and abstract keywords, exact title and
   publication date are resolved *before* ranking, so a patent that fails a filter never appears.
   Keyword filters use an inverted index (word to patents), and a date range is two binary searches
   over patents sorted by date. For each query the engine picks the cheapest of three filtering
   methods from how selective the filter is, much as a database query planner does. When nothing
-  matches, it says which filter caused it and suggests fixes. A command-line tool (`src/cli.py`)
-  and a browser page (`app.py`) use the same engine.
+  matches, it says which filter caused it and suggests fixes. A command-line tool and a simple
+  browser page use the same engine.
 
 **What I found when running it**
 
@@ -149,18 +149,19 @@ the index is built and how to run it.
   the live one and switched in with an alias, so a model change needs no downtime. About $7,400 a
   month in an illustrative AWS scenario (about $16,500 at the 147 passages per patent measured in
   [Part 3](docs/PART3.md)), plus a one-off $31–188 to embed everything on spot GPUs.
-- **The code** (`poc/`) builds the hardest part to get right, reliable ingestion, in miniature,
-  using only PostgreSQL: OpenSearch, S3 and the API are designed but not built.
-  Workers are competing consumers on a PostgreSQL work queue (`FOR UPDATE SKIP LOCKED`), so two
-  workers never take the same job. A job is held under a time-limited lease that the worker renews
-  with a heartbeat; if the worker crashes the lease expires and another worker takes the job, and a
-  lease token on every write fences off a stale worker. Transient failures are retried with
-  exponential backoff (waiting 5, 20, then 80 seconds) up to a maximum number of attempts, while a
-  permanent failure such as a corrupt file fails at once. Bad records are quarantined with their
-  reason instead of failing the whole file. Each file is saved in one atomic transaction and
-  writes are idempotent, keyed by patent ID and content hash, which gives at-least-once
-  processing with an exactly-once effect. Jobs move through a small state machine (queued,
-  processing, retry_wait, complete, complete_with_errors, failed). 10 automated tests.
+- **The code** builds the hardest part to get right, reliable ingestion, in miniature, using only
+  PostgreSQL: OpenSearch, S3 and the API are designed but not built. Workers are competing
+  consumers on a PostgreSQL work queue, using row locks that skip jobs another worker already
+  holds, so two workers never take the same job. A job is held under a time-limited lease that
+  the worker renews with a heartbeat; if the worker crashes the lease expires and another worker
+  takes the job, and a lease token on every write fences off a stale worker. Transient failures
+  are retried with exponential backoff (waiting 5, 20, then 80 seconds) up to a maximum number of
+  attempts, while a permanent failure such as a corrupt file fails at once. Bad records are
+  quarantined with their reason instead of failing the whole file. Each file is saved in one
+  atomic transaction and writes are idempotent, keyed by patent ID and content hash, which gives
+  at-least-once processing with an exactly-once effect. Each job moves through a small state
+  machine: queued, processing, waiting to retry, then complete, complete with errors, or failed.
+  10 automated tests.
 
 **What I found when running it** (66 jobs: the 64 weekly files plus 2 deliberately bad files)
 
@@ -211,16 +212,17 @@ splitting patents into passages and embedding them.)
 
 **My approach: how the code addresses the problem**
 
-- **Measuring before changing anything:** `benchmarks/profile_large.py` profiles the build to find
-  the bottleneck, and `embed_speed.py` and `build_ab.py` compare alternatives end to end on
-  complete builds instead of trusting small tests. `src/load_data.py` samples the large dataset
-  evenly with a fixed seed (`--data data/patent_data_large:300`), so every run uses the same
-  patents, and loads it defensively.
-- **Improving search:** a two-stage retrieval. `src/build_index.py` builds an HNSW index (a
-  hierarchical navigable small-world graph, a kind of approximate nearest-neighbour index) once the
-  index is large enough. `src/search.py` uses it to fetch candidates for searches without filters,
-  then re-scores the best patents exactly, trading a little recall for a lot of speed, and
-  `search_large.py` and `search_scaling.py` measure both sides of that trade.
+- **Measuring before changing anything:** I first profiled the build to find the bottleneck, then
+  compared each alternative end to end on complete builds, instead of trusting small tests. The
+  large dataset is sampled evenly with a fixed seed, so every run uses the same patents, and it is
+  loaded defensively: a malformed file is skipped with a warning instead of being dropped
+  silently.
+- **Improving search:** a two-stage retrieval. Once the index is large enough, the build also
+  creates an HNSW index (a hierarchical navigable small-world graph, a kind of approximate
+  nearest-neighbour index). Searches without filters use it to fetch candidates quickly, then
+  re-score the best patents exactly, trading a little recall for a lot of speed. Separate
+  benchmarks measure both sides of that trade: the speed-up and how often the results still match
+  exact search.
 
 **What I found when running it** (940 patents, 75,018 passages)
 
