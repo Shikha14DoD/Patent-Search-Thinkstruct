@@ -13,3 +13,5 @@ psycopg[binary]==3.3.9
 onnxruntime==1.32.0
 # Part 3: approximate nearest-neighbour search (HNSW)
 faiss-cpu==1.16.0
+# Optional browser page (app.py)
+streamlit==1.67.0

@@ -319,6 +319,11 @@ prefix, kind code, spaces or slashes. With no query, filtered patents are
 listed newest first. `--excerpts N` changes how many passages each result shows, `--full`
 prints them whole, and `python -m src.cli --help` lists every option.
 
+**Or in a browser:** `streamlit run app.py` opens a simple page with the same search, filters,
+similar-patent search and evidence passages. It is a convenience over the same engine, not the
+Part 3 interface option. The model loads once, so searches after the first take milliseconds
+instead of paying the CLI's 13 s start-up each time.
+
 ### 5. Reproduce the timings
 
 ```
@@ -488,6 +493,7 @@ src/text_utils.py     word normalisation shared by indexing and filters
 src/build_index.py    embeddings, embedding cache, filter lookup tables
 src/search.py         search, filters, filtering strategies, excerpts, suggestions
 src/cli.py            command-line interface
+app.py                simple browser page over the same engine (streamlit run app.py)
 src/bm25.py           BM25 keyword ranking, the evaluation baseline
 benchmarks/timing.py  filters-on vs filters-off benchmark
 benchmarks/*_large.py, build_ab.py, embed_speed.py, search_scaling.py
