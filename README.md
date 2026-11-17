@@ -15,7 +15,11 @@ to its full write-up:
   proof of concept of the ingestion pipeline.
 - [Part 3](docs/PART3.md): speed measurements and improvements on the large dataset.
 
-**How to run this project**
+Every design choice, with the evidence behind it, is in [`DECISIONS.md`](DECISIONS.md), a log of
+numbered decisions (D1, D2, …). Where this page cites one, it also states the reason in plain
+words, so you never need to open the log to follow the page.
+
+## How to run this project
 
 1. **Install.** You need Python 3.12 or newer. Create a virtual environment and install the
    packages with `pip install -r requirements.txt` (exact commands in [How to run](#how-to-run)).
@@ -34,11 +38,7 @@ to its full write-up:
 
 All three sets of commands are also collected in one place under [How to run](#how-to-run) below.
 
-Every design choice, with the evidence behind it, is in [`DECISIONS.md`](DECISIONS.md), a log of
-numbered decisions (D1, D2, …). Where this page cites one, it also states the reason in plain
-words, so you never need to open the log to follow the page.
-
-**Terms used on this page**
+## Terms used on this page
 
 - **Passage:** one searchable piece of a patent: the abstract, a single claim, or a single
   description paragraph.
@@ -266,7 +266,9 @@ docker-compose.yml    PostgreSQL for the proof of concept
   with the default picked by a test where people judge the results
   ([details](docs/PART1.md#what-i-would-use-to-improve-search-quality)).
 
-**What the data can support.** The sample is 640 vehicle-related US patent applications
+### What the data can support
+
+The sample is 640 vehicle-related US patent applications
 published between February 2024 and May 2025. It cannot support real conclusions about whether
 an idea is new (prior art), or whether something infringes, because those need older patents,
 patents from other countries, granted patents and non-patent literature such as journal papers.
