@@ -54,6 +54,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import random
 import re
 from dataclasses import dataclass, field
 
@@ -161,8 +162,8 @@ def publication_date_from_filename(path: str) -> str:
 
 
 def google_patents_url(filename: str, patent_id: str) -> str:
-    """US20240051333A1-20240215.XML -> https://patents.google.com/patent/US20240051333A1"""
-    stem = (filename or "").split("-")[0].strip()
+    """US20240051333A1-20240215.XML or US20200187828A1.XML -> .../patent/US…A1"""
+    stem = (filename or "").split("-")[0].split(".")[0].strip()
     if not re.fullmatch(r"[A-Z]{2}\d+[A-Z]\d?", stem):
         stem = f"US{patent_id}A1"
     return f"https://patents.google.com/patent/{stem}"
@@ -315,11 +316,18 @@ def parse_record(record: dict, published: str, report: dict | None = None) -> Pa
     count("claims_number_inferred", sum(1 for c in claims if c.number_inferred))
     count("claims_preamble_missing", sum(1 for c in claims if c.preamble_missing))
 
+    classification = (record.get("classification") or "").strip()
+    if classification.upper() in MISSING_MARKERS:
+        # The large dataset writes a missing code as the text "N/A" (38% of a
+        # sample). Kept as missing, so no classification filter can match it.
+        count("classification_marked_missing", 1)
+        classification = ""
+
     return Patent(
         patent_id=patent_id,
         title=collapse_space(record.get("title")),
         abstract=collapse_space(record.get("abstract")),
-        classification=(record.get("classification") or "").strip(),
+        classification=classification,
         publication_date=published,
         url=google_patents_url(record.get("filename", ""), patent_id),
         claims=claims,
@@ -329,28 +337,77 @@ def parse_record(record: dict, published: str, report: dict | None = None) -> Pa
     )
 
 
-def load_patents(data_dir: str) -> tuple[list[Patent], dict[str, int]]:
-    """Read every patents_ipa*.json file in data_dir. Returns (patents, report)."""
-    paths = sorted(glob.glob(os.path.join(data_dir, "*.json")))
+def spread(items: list, count: int) -> list:
+    """count items taken evenly from across the list (first and last included)."""
+    if count >= len(items):
+        return list(items)
+    step = (len(items) - 1) / max(count - 1, 1)
+    return [items[round(i * step)] for i in range(count)]
+
+
+MISSING_MARKERS = {"N/A", "NA", "NONE", "NULL"}  # text that means "no classification"
+PER_FILE_SAMPLE = 50  # with a limit, take about this many patents from each chosen file
+
+
+def patent_files(data_dir: str) -> list[str]:
+    """The patent batch files under data_dir, subfolders included, in a stable order.
+
+    Only files named patents*.json count (patents_ipa240215.json in the small
+    sample, patents_batch_0001.json in the large one), so other JSON files
+    lying next to them, such as the large dataset's sample.json, are not read
+    as patent batches.
+    """
+    return sorted(glob.glob(os.path.join(data_dir, "**", "patents*.json"), recursive=True))
+
+
+def load_patents(data_dir: str, limit: int | None = None, seed: int = 0
+                 ) -> tuple[list[Patent], dict[str, int]]:
+    """Read the .json files under data_dir (subfolders included). Returns (patents, report).
+
+    With a limit, only about `limit` patents are loaded: a random sample of
+    about 50 from each of several files spread evenly across the dataset, so
+    the sample covers the whole dataset rather than its first file.
+    """
+    paths = patent_files(data_dir)
     if not paths:
         raise FileNotFoundError(
-            f"No .json files found in {data_dir!r}. "
-            "Unzip the dataset so the files sit directly inside that folder."
+            f"No patents*.json files found in {data_dir!r}. "
+            "Unzip the dataset so the files sit inside that folder."
         )
 
     patents: list[Patent] = []
     seen: set[str] = set()
-    report = {"files": len(paths), "records": 0, "skipped_no_id": 0,
+    report = {"files": len(paths), "files_not_a_list": 0, "records": 0, "skipped_no_id": 0,
               "skipped_duplicate_id": 0, "blank_paragraphs": 0,
               "short_paragraphs_skipped": 0,
               "cancelled_claim_entries": 0, "claims_number_inferred": 0,
               "claims_preamble_missing": 0}
 
+    per_file = None
+    if limit:
+        files = min(len(paths), max(1, -(-limit // PER_FILE_SAMPLE)))
+        paths = spread(paths, files)
+        per_file = -(-limit // len(paths))
+        report["files"] = len(paths)
+    rng = random.Random(seed)
+
     for path in paths:
+        if limit and len(patents) >= limit:
+            break
         published = publication_date_from_filename(path)
         with open(path, encoding="utf-8") as handle:
             records = json.load(handle)
+        if not isinstance(records, list):
+            # Reported, never silently skipped: a batch file should be a list of records.
+            report["files_not_a_list"] += 1
+            print(f"warning: {path} is not a list of patent records; skipped")
+            continue
+        if per_file is not None:
+            usable = [r for r in records if isinstance(r, dict)]
+            records = rng.sample(usable, min(per_file, len(usable)))
         for record in records:
+            if limit and len(patents) >= limit:
+                break
             report["records"] += 1
             patent_id = str(record.get("doc_number", "")).strip()
             if not patent_id:
@@ -443,10 +500,29 @@ def build_units(patents: list[Patent], counter: TokenCounter | None = None
     return units, stats
 
 
-def load_corpus(data_dir: str, tokenizer=None
+def load_corpus(data_dir: str | list[str], tokenizer=None, limit: int | None = None
                 ) -> tuple[list[Patent], list[Unit], dict[str, int]]:
-    """Load, clean and split. Pass the model's tokenizer for exact token counts."""
-    patents, report = load_patents(data_dir)
+    """Load, clean and split. Pass the model's tokenizer for exact token counts.
+
+    data_dir may be a list of folders; a folder written as "path:N" contributes
+    a spread-out sample of N patents (for example "data/patent_data_large:300").
+    A patent ID that appears in more than one folder is kept once.
+    """
+    folders = [data_dir] if isinstance(data_dir, str) else list(data_dir)
+    patents, report, seen = [], {}, set()
+    for folder in folders:
+        path, _, count = folder.rpartition(":")
+        if not (path and count.isdigit()):
+            path, count = folder, ""
+        found, found_report = load_patents(path, int(count) if count else limit)
+        for key, value in found_report.items():
+            report[key] = report.get(key, 0) + value
+        for patent in found:
+            if patent.patent_id in seen:
+                report["skipped_duplicate_id"] = report.get("skipped_duplicate_id", 0) + 1
+                continue
+            seen.add(patent.patent_id)
+            patents.append(patent)
     units, unit_stats = build_units(patents, TokenCounter(tokenizer))
     report.update(unit_stats)
     return patents, units, report
