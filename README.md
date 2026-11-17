@@ -85,7 +85,7 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
 
 ## Part 1: semantic search with strict filters
 
-**How the code addresses the problem statement**
+**My approach: how the code addresses the problem**
 
 - **The same idea in different words:** dense retrieval. `src/build_index.py` turns every passage
   into an embedding (a list of numbers, so similar *meaning* ends up close together) with a
@@ -122,6 +122,15 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
   (8 of 12 needs, nDCG@10, with a 95% bootstrap interval; a small, AI-graded test). Semantic search
   stays the default, and combining the two with reciprocal rank fusion is the next candidate.
 
+**What I'd add next**
+
+- **Let the user choose the ranking** (meaning-based, keyword or combined), and pick the default
+  with a human-judged test of about 100 queries split by query type, with a decision rule fixed in
+  advance. [Details →](docs/PART1.md#what-i-would-use-to-improve-search-quality)
+- **Collapse patent families** so versions of one invention don't fill several places in the top
+  10, and add a **landscape view** that groups results by topic, classification and month.
+  [Details →](docs/PART1.md#what-i-would-use-to-improve-search-quality)
+
 **[Read the full Part 1 write-up →](docs/PART1.md)** Details of each finding:
 [data problems](docs/PART1.md#missing-and-malformed-data),
 [search quality](docs/PART1.md#search-quality) and
@@ -130,7 +139,7 @@ the index is built and how to run it.
 
 ## Part 2: implementation at scale
 
-**How the design and code address the problem statement**
+**My approach: how the design and code address the problem**
 
 - **The design** ([docs/PART2_DESIGN.md](docs/PART2_DESIGN.md)) takes Part 1's search to 10 million
   patents as a decoupled pipeline: Amazon S3 (file storage) holds the original files, a PostgreSQL
@@ -140,7 +149,8 @@ the index is built and how to run it.
   the live one and switched in with an alias, so a model change needs no downtime. About $7,400 a
   month in an illustrative AWS scenario (about $16,500 at the 147 passages per patent measured in
   [Part 3](docs/PART3.md)), plus a one-off $31–188 to embed everything on spot GPUs.
-- **The code** (`poc/`) builds the hardest part to get right, reliable ingestion, in miniature.
+- **The code** (`poc/`) builds the hardest part to get right, reliable ingestion, in miniature,
+  using only PostgreSQL: OpenSearch, S3 and the API are designed but not built.
   Workers are competing consumers on a PostgreSQL work queue (`FOR UPDATE SKIP LOCKED`), so two
   workers never take the same job. A job is held under a time-limited lease that the worker renews
   with a heartbeat; if the worker crashes the lease expires and another worker takes the job, and a
@@ -163,8 +173,20 @@ the index is built and how to run it.
 - **Two workers at once:** 35 and 31 jobs, no job processed twice, and the final counts were
   identical to the single-worker run, so nothing was stored twice.
 - **Settled by measurement in the design:** every passage is embedded, because 64% of top results
-  matched on a description paragraph; OpenSearch is used rather than PostgreSQL alone, because
+  matched on a description paragraph; the design uses OpenSearch rather than PostgreSQL alone, because
   keyword ranking proved essential in [Part 1](docs/PART1.md).
+
+**What I'd add next**
+
+- **A 1% pilot before buying anything:** index about 100,000 patents and measure index size,
+  memory, recall against exact search, and response time under load. The first task checks that
+  OpenSearch's nested vector search keeps filters strict, since those features are untested
+  together. [Details →](docs/PART2_DESIGN.md#9-major-challenges)
+- **Build the rest in order:** S3 intake, the OpenSearch index, embedding workers, the API with
+  both searches, then zero-downtime index switching.
+  [Details →](docs/PART2_DESIGN.md#10-build-order-for-an-intern)
+- **Other countries and languages,** one office and one language at a time.
+  [Details →](docs/PART2_DESIGN.md#12-future-scope-other-countries-and-languages)
 
 **[Read the full Part 2 summary →](docs/PART2.md)** See
 [what I saw when I ran it](docs/PART2.md#what-i-saw-when-i-ran-it) for the full results, and the
@@ -187,7 +209,7 @@ splitting patents into passages and embedding them.)
   and embedding speed) with measurements on real data; the measured 147 passages per patent now
   feeds Part 2's cost section.
 
-**How the code addresses the problem statement**
+**My approach: how the code addresses the problem**
 
 - **Measuring before changing anything:** `benchmarks/profile_large.py` profiles the build to find
   the bottleneck, and `embed_speed.py` and `build_ab.py` compare alternatives end to end on
@@ -217,6 +239,15 @@ splitting patents into passages and embedding them.)
   searches use the graph.
 - **Data problems caught:** a stray file that silently dropped patents, and 38% of the
   classification codes sampled written as the text "N/A", now treated as missing.
+
+**What I'd add next**
+
+- **Embed on a GPU,** measured with the same complete-build benchmark, since no CPU speed-up
+  helped. [Details →](docs/PART3.md#what-i-would-do-next)
+- **Fast filtered search at scale:** in the Part 2 design the filter runs inside OpenSearch's vector
+  search; check its recall the same way. [Details →](docs/PART3.md#what-i-would-do-next)
+- **Re-test 8-bit compression** once a human-judged relevance test exists, and **measure at the 1%
+  pilot size** of 100,000 patents. [Details →](docs/PART3.md#what-i-would-do-next)
 
 **[Read the full Part 3 write-up →](docs/PART3.md)** Details:
 [processing measured](docs/PART3.md#processing-measured),

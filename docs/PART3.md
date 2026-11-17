@@ -92,6 +92,26 @@ Filtered searches run at the same speed as before (0.8–1.2×) with 100% recall
 Exact time roughly doubles each time the index doubles; HNSW barely moves. That is why [Part 2](PART2.md) uses an
 approximate vector index in OpenSearch.
 
+## What I would do next
+
+- **Embed on a GPU.** On a CPU none of the four attempts helped: embedding is limited by raw
+  compute. [Part 2](PART2.md) prices a one-off embedding of every passage at $31–188 on spot GPUs
+  ([design, section 8.3](PART2_DESIGN.md#83-one-off-backfill-and-the-same-cost-again-for-every-model-change)).
+  The first step is to run the same complete-build benchmark (`build_ab.py`) on one GPU and redo
+  the 26-day projection from that rate. Nothing here has been measured on a GPU yet.
+- **Make filtered searches fast at scale.** Filtered searches still compare the query with every
+  eligible passage, so their time grows with the index. At scale the filter moves inside
+  OpenSearch's vector search, which applies it during the search and falls back to exact search
+  when few patents pass ([design, section 4.4](PART2_DESIGN.md#44-one-search-step-by-step)). Its
+  recall would be checked with the same benchmark that rejected filtered HNSW here.
+- **Re-test 8-bit compression once relevance can be measured.** It changed 1.4 to 1.6 of each top
+  10 and was rejected because nothing measured whether those changes were worse. With the
+  human-judged test planned in [Part 1](PART1.md#what-i-would-use-to-improve-search-quality), it
+  could be judged on quality instead of on agreement alone.
+- **Measure at a larger size.** The scaling test stopped at 940 patents (75,018 passages) on a
+  laptop. The next point is the design's 1% pilot of 100,000 patents
+  ([design, section 9](PART2_DESIGN.md#9-major-challenges)).
+
 ## How to run Part 3
 
 Run every command from the repository's top folder.
