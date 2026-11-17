@@ -77,8 +77,6 @@ with st.sidebar:
                                       help="YYYY, YYYY-MM or YYYY-MM-DD, e.g. 2024-06")
     sort = st.radio("Order results by", ["Relevance", "Newest first"], key="sort",
                     help="Newest first shows the same best matches, newest at the top")
-    top_k = st.number_input("Results to show", min_value=1, max_value=100_000, value=10, step=10,
-                            help="Up to every patent that passes the filters")
 
 st.title("Patent Evidence Explorer")
 st.caption("Semantic patent search that shows the claim or paragraph behind every result.")
@@ -87,7 +85,6 @@ if not os.path.isdir(index_dir):
     st.error(f"No index folder '{index_dir}'. Build it first: python -m src.build_index")
     st.stop()
 engine = load_engine(index_dir)
-top_k = min(int(top_k), len(engine.patents))
 
 mode = st.radio("Search by", [DESCRIBE, SIMILAR], horizontal=True, key="mode")
 if mode == SIMILAR:
@@ -110,6 +107,23 @@ for value in (published_from, published_to):
         except ValueError as error:
             st.error(f"Publication date: {error}.")
             st.stop()
+
+# The Results slider reaches exactly the patents that pass the filters (counting
+# them is a few set lookups), minus the source patent in a similar-patent search.
+allowed, _, _ = engine.resolve_filters(filters)
+eligible = len(engine.patents) if allowed is None else len(allowed)
+if similar_to.strip():
+    resolved, _ = engine.resolve_patent_id(similar_to)
+    if resolved is not None and (allowed is None or resolved in allowed):
+        eligible -= 1
+with st.sidebar:
+    if eligible > 1:
+        top_k = st.slider("Results", 1, eligible, min(10, eligible),
+                          help="Up to every patent that passes the filters")
+    else:
+        top_k = 1
+        st.caption(f"Results: {eligible} patent{' passes' if eligible == 1 else 's pass'} "
+                   "the filters")
 
 clicked = st.button("Search", type="primary")
 if not (clicked or st.session_state.pop("run", False)):
@@ -186,7 +200,7 @@ else:
 eligible = report.candidate_patents
 if eligible > len(report.results):
     st.info(f"Showing {len(report.results)} of {eligible} patents that pass the filters. "
-            "Increase 'Results to show' in the sidebar to see more.")
+            "Move the Results slider in the sidebar to see more.")
 
 for result in report.results:
     with st.container(border=True):
