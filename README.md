@@ -283,7 +283,7 @@ splitting patents into passages and embedding them.)
 The full large dataset was not indexed: at the measured embedding rate, all ~471,000 patents would
 take about 26 days on a laptop CPU ([Part 3](docs/PART3.md#processing-measured)).
 
-## How to run
+## Recreate the results
 
 Run every command from the **top folder of the repository** (the folder that contains
 `README.md`). The commands below are for Windows PowerShell; the macOS and Linux differences are
