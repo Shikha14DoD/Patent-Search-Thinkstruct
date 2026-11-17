@@ -1,0 +1,60 @@
+{
+  "data": [
+    "data/patent_data_large:20"
+  ],
+  "patents": 20,
+  "units": 2903,
+  "embedded_per_run": 2852,
+  "order": [
+    "batch 64, 1 process",
+    "batch 64, 4 processes",
+    "batch 64, 4 processes",
+    "batch 64, 1 process"
+  ],
+  "warm_up_s": 156.3,
+  "runs": [
+    {
+      "setting": "batch 64, 1 process",
+      "wall_s": 117.0,
+      "embed_s": 100.43,
+      "embedded": 2852,
+      "units": 2903,
+      "patents": 20
+    },
+    {
+      "setting": "batch 64, 4 processes",
+      "wall_s": 159.5,
+      "embed_s": 98.07,
+      "embedded": 2852,
+      "units": 2903,
+      "patents": 20
+    },
+    {
+      "setting": "batch 64, 4 processes",
+      "wall_s": 173.8,
+      "embed_s": 108.28,
+      "embedded": 2852,
+      "units": 2903,
+      "patents": 20
+    },
+    {
+      "setting": "batch 64, 1 process",
+      "wall_s": 166.5,
+      "embed_s": 145.35,
+      "embedded": 2852,
+      "units": 2903,
+      "patents": 20
+    }
+  ],
+  "mean": {
+    "batch 64, 1 process": {
+      "build_s": 141.8,
+      "embed_s": 122.9
+    },
+    "batch 64, 4 processes": {
+      "build_s": 166.7,
+      "embed_s": 103.2
+    }
+  },
+  "min_cosine_vs_first_run": 1.0
+}

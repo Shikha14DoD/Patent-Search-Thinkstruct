@@ -1,0 +1,363 @@
+{
+  "index": "index_large",
+  "patents": 940,
+  "vectors": 75018,
+  "repeats": 20,
+  "auto_rule": "HNSW without filters, exact otherwise",
+  "query_sets": {
+    "Part 1 queries (vehicles)": [
+      {
+        "scenario": "No filter",
+        "patents_allowed_share": 1.0,
+        "auto_used": [
+          "hnsw"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 7.06,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 42.48
+        },
+        "hnsw": {
+          "retrieval_ms": 2.7,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0
+        },
+        "auto": {
+          "retrieval_ms": 2.61,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 29.24
+        }
+      },
+      {
+        "scenario": "Classification B60 (vehicles, broad)",
+        "patents_allowed_share": 0.683,
+        "auto_used": [
+          "mask"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 5.94,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 29.06
+        },
+        "hnsw": {
+          "retrieval_ms": 4.51,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0
+        },
+        "auto": {
+          "retrieval_ms": 6.22,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 29.55
+        }
+      },
+      {
+        "scenario": "Classification B60C (tyres)",
+        "patents_allowed_share": 0.339,
+        "auto_used": [
+          "mask"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 5.81,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 22.5
+        },
+        "hnsw": {
+          "retrieval_ms": 6.25,
+          "recall_at_10": 0.992,
+          "min_recall_at_10": 0.9
+        },
+        "auto": {
+          "retrieval_ms": 5.97,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 22.0
+        }
+      },
+      {
+        "scenario": "Title contains 'wheel'",
+        "patents_allowed_share": 0.197,
+        "auto_used": [
+          "mask"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 5.99,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 21.45
+        },
+        "hnsw": {
+          "retrieval_ms": 11.58,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0
+        },
+        "auto": {
+          "retrieval_ms": 5.97,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 20.01
+        }
+      },
+      {
+        "scenario": "Classification A61B (medical, selective)",
+        "patents_allowed_share": 0.003,
+        "auto_used": [
+          "prefilter"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 0.44,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 15.49
+        },
+        "hnsw": {
+          "retrieval_ms": 3.11,
+          "recall_at_10": 0.639,
+          "min_recall_at_10": 0.33
+        },
+        "auto": {
+          "retrieval_ms": 0.46,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 16.83
+        }
+      },
+      {
+        "scenario": "Classification G06 (other field, 24 patents)",
+        "patents_allowed_share": 0.026,
+        "auto_used": [
+          "prefilter"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 3.23,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 18.16
+        },
+        "hnsw": {
+          "retrieval_ms": 31.46,
+          "recall_at_10": 0.85,
+          "min_recall_at_10": 0.6
+        },
+        "auto": {
+          "retrieval_ms": 3.16,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 18.13
+        }
+      },
+      {
+        "scenario": "Classification H01 (other field, 23 patents)",
+        "patents_allowed_share": 0.024,
+        "auto_used": [
+          "prefilter"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 2.49,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 17.91
+        },
+        "hnsw": {
+          "retrieval_ms": 22.87,
+          "recall_at_10": 0.917,
+          "min_recall_at_10": 0.8
+        },
+        "auto": {
+          "retrieval_ms": 2.66,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 16.83
+        }
+      }
+    ],
+    "New-field queries": [
+      {
+        "scenario": "No filter",
+        "patents_allowed_share": 1.0,
+        "auto_used": [
+          "hnsw"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 5.39,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 21.35
+        },
+        "hnsw": {
+          "retrieval_ms": 1.98,
+          "recall_at_10": 0.988,
+          "min_recall_at_10": 0.9
+        },
+        "auto": {
+          "retrieval_ms": 1.59,
+          "recall_at_10": 0.988,
+          "min_recall_at_10": 0.9,
+          "complete_ms": 15.75
+        }
+      },
+      {
+        "scenario": "Classification B60 (vehicles, broad)",
+        "patents_allowed_share": 0.683,
+        "auto_used": [
+          "mask"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 5.62,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 22.3
+        },
+        "hnsw": {
+          "retrieval_ms": 3.64,
+          "recall_at_10": 0.875,
+          "min_recall_at_10": 0.6
+        },
+        "auto": {
+          "retrieval_ms": 5.82,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 21.37
+        }
+      },
+      {
+        "scenario": "Classification B60C (tyres)",
+        "patents_allowed_share": 0.339,
+        "auto_used": [
+          "mask"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 7.14,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 28.3
+        },
+        "hnsw": {
+          "retrieval_ms": 7.16,
+          "recall_at_10": 0.863,
+          "min_recall_at_10": 0.6
+        },
+        "auto": {
+          "retrieval_ms": 6.75,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 29.38
+        }
+      },
+      {
+        "scenario": "Title contains 'wheel'",
+        "patents_allowed_share": 0.197,
+        "auto_used": [
+          "mask"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 6.36,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 34.12
+        },
+        "hnsw": {
+          "retrieval_ms": 13.21,
+          "recall_at_10": 0.925,
+          "min_recall_at_10": 0.7
+        },
+        "auto": {
+          "retrieval_ms": 6.11,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 27.86
+        }
+      },
+      {
+        "scenario": "Classification A61B (medical, selective)",
+        "patents_allowed_share": 0.003,
+        "auto_used": [
+          "prefilter"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 0.57,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 22.61
+        },
+        "hnsw": {
+          "retrieval_ms": 3.54,
+          "recall_at_10": 0.875,
+          "min_recall_at_10": 0.33
+        },
+        "auto": {
+          "retrieval_ms": 0.73,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 22.24
+        }
+      },
+      {
+        "scenario": "Classification G06 (other field, 24 patents)",
+        "patents_allowed_share": 0.026,
+        "auto_used": [
+          "prefilter"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 4.61,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 37.02
+        },
+        "hnsw": {
+          "retrieval_ms": 50.79,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0
+        },
+        "auto": {
+          "retrieval_ms": 5.03,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 32.64
+        }
+      },
+      {
+        "scenario": "Classification H01 (other field, 23 patents)",
+        "patents_allowed_share": 0.024,
+        "auto_used": [
+          "prefilter"
+        ],
+        "same_evidence": 1.0,
+        "exact": {
+          "retrieval_ms": 2.81,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 21.98
+        },
+        "hnsw": {
+          "retrieval_ms": 26.23,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0
+        },
+        "auto": {
+          "retrieval_ms": 3.08,
+          "recall_at_10": 1.0,
+          "min_recall_at_10": 1.0,
+          "complete_ms": 20.7
+        }
+      }
+    ]
+  }
+}
