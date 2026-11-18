@@ -13,50 +13,12 @@ to its full write-up:
 - [Part 1](docs/PART1.md): the search engine and its filters.
 - [Part 2](docs/PART2.md): how the system would scale to 10 million patents, plus a working
   proof of concept of the ingestion pipeline.
-- [Part 3](docs/PART3.md): speed measurements and improvements on the large dataset.
+- [Part 3](docs/PART3.md): processing and search measured on the large dataset, and search made
+  faster.
 
 Every design choice, with the evidence behind it, is in [`DECISIONS.md`](DECISIONS.md), a log of
 numbered decisions (D1, D2, …). Where this page cites one, it also states the reason in plain
 words, so you never need to open the log to follow the page.
-
-## Getting started
-
-Do **Step 0** once, then run any of the three parts. Each part is a short numbered list in
-[Recreate the results](#recreate-the-results) further down this page:
-
-1. [Step 0: set up](#step-0-set-up-once): install Python packages and add the data.
-2. [Part 1: build the index and search](#part-1-build-the-index-and-search)
-3. [Part 2: run the ingestion proof of concept](#part-2-run-the-ingestion-proof-of-concept) (needs Docker)
-4. [Part 3: measure speed on the large dataset](#part-3-measure-speed-on-the-large-dataset)
-
-Each part's own page has the same steps with more explanation and the output to expect:
-[Part 1](docs/PART1.md#how-to-run-part-1), [Part 2](docs/PART2.md) and
-[poc/README.md](poc/README.md#run-it), [Part 3](docs/PART3.md#how-to-run-part-3).
-
-## Terms used on this page
-
-- **Passage:** one searchable piece of a patent: the abstract, a single claim, or a single
-  description paragraph.
-- **Embedding / semantic search:** a model turns each passage into a list of numbers so that
-  passages with similar *meaning* end up close together, even when the words differ.
-- **BM25:** the classic keyword-ranking formula used by traditional search engines. It rewards
-  passages that contain the query's words.
-- **Recall@1 / Recall@10:** how often the correct patent is the first result / is among the top
-  10 results.
-- **Exact search:** comparing the query with every passage. Slow on large data but always correct.
-- **HNSW:** an index that works like a shortcut map, so a search visits only a small part of the
-  data instead of all of it. Faster, but approximate.
-- **Lease, heartbeat and fencing:** a worker holds a job under a time-limited lease and renews it
-  regularly (a heartbeat). If the worker dies, the lease runs out and another worker takes the job;
-  a token on each write stops the old worker from saving anything afterwards.
-- **Idempotent write:** doing it twice has the same effect as doing it once, so a retry cannot
-  create a duplicate.
-- **Exponential backoff:** waiting longer after each failed attempt (here 5, 20, then 80 seconds).
-- **Reciprocal rank fusion:** merging two ranked lists by rank position, not by score.
-- **Amdahl's law:** if one step takes 99.5% of the time, speeding up everything else can save at
-  most 0.5%.
-- **Classification code:** the patent office's category code for a patent, such as B60B for vehicle wheels.
-- **Weekly files:** the small dataset is 64 JSON files, one per week of publications.
 
 ## Problem statement
 
@@ -80,8 +42,49 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
 | Part | What was built | Why | Key finding from running it | Full write-up |
 |---|---|---|---|---|
 | 1. Search engine | Semantic search over every claim and paragraph, with strict filters and the matching passage shown as evidence | A whole patent is too long to count as evidence, and a patent that fails a filter must never appear | A filtered search costs about the same as an unfiltered one (2.1–3.2 ms against 2.48 ms); the obvious way of filtering was 2–9× slower | [docs/PART1.md](docs/PART1.md) |
-| 2. At scale | A design for 10 million patents, and a working ingestion proof of concept | Reliable ingestion is where a large system fails first, so that is the part I built and tested | Two workers never take the same job, a crashed worker's job is finished by another, and nothing is stored twice (641 unique patents) | [docs/PART2.md](docs/PART2.md) |
-| 3. Enhancement picked: **efficiency and large data** | Processing and search measured on the large dataset, then improved | The result is measured, not judged; it is where a real system breaks first; and it tests Part 2's estimates with real numbers | Searches without filters 2.7–3.4× faster at 75,018 passages (5.8× in the scaling test), with the same results; no CPU speed-up for processing, so a GPU is the lever | [docs/PART3.md](docs/PART3.md) |
+| 2. At scale | A design for 10 million patents, and a working ingestion proof of concept | Reliable ingestion is where a large system fails first, so that is the part I built and tested | Two workers never take the same job, a crashed worker's job is finished by another, and nothing is stored twice (641 unique patents: the 640 real ones plus 1 valid record from a test file) | [docs/PART2.md](docs/PART2.md) |
+| 3. Enhancement picked: **efficiency and large data** | Processing profiled and four speed-ups tested; search improved | The result is measured, not judged; it is where a real system breaks first; and it tests Part 2's estimates with real numbers | Searches without filters 2.7–3.4× faster at 75,018 passages (5.8× in the scaling test), with 99–100% of exact search's top 10 and the same evidence passages; no CPU speed-up for processing, so a GPU is the lever | [docs/PART3.md](docs/PART3.md) |
+
+## Getting started
+
+Do **Step 0** once, then run any of the three parts. Each part is a short numbered list in
+[Recreate the results](#recreate-the-results) further down this page:
+
+1. [Step 0: set up](#step-0-set-up-once): install Python packages and add the data.
+2. [Part 1: build the index and search](#part-1-build-the-index-and-search)
+3. [Part 2: run the ingestion proof of concept](#part-2-run-the-ingestion-proof-of-concept) (needs Docker)
+4. [Part 3: measure speed on the large dataset](#part-3-measure-speed-on-the-large-dataset)
+
+Each part's own page has the same steps with more explanation and the output to expect:
+[Part 1](docs/PART1.md#how-to-run-part-1), [Part 2](docs/PART2.md) and
+[poc/README.md](poc/README.md#run-it), [Part 3](docs/PART3.md#how-to-run-part-3).
+
+## Terms used on this page
+
+- **Passage:** one searchable piece of a patent: the abstract, a single claim, or a single
+  description paragraph.
+- **Embedding / semantic search:** a model turns each passage into a list of numbers so that
+  passages with similar *meaning* end up close together, even when the words differ.
+- **BM25:** the classic keyword-ranking formula used by traditional search engines. It rewards
+  passages that contain the query's words.
+- **Recall@1 / Recall@10:** used in two ways on this page. In Part 1's search-quality check, how
+  often a known correct patent is the first result / is among the top 10. In Part 3, how many of
+  exact search's top 10 patents the faster search also returns (agreement with exact search).
+  Neither measures legal prior-art relevance.
+- **Exact search:** comparing the query with every passage. Slow on large data but always correct.
+- **HNSW:** an index that works like a shortcut map, so a search visits only a small part of the
+  data instead of all of it. Faster, but approximate.
+- **Lease, heartbeat and fencing:** a worker holds a job under a time-limited lease and renews it
+  regularly (a heartbeat). If the worker dies, the lease runs out and another worker takes the job;
+  a token on each write stops the old worker from saving anything afterwards.
+- **Idempotent write:** doing it twice has the same effect as doing it once, so a retry cannot
+  create a duplicate.
+- **Exponential backoff:** waiting longer after each failed attempt (here 5, 20, then 80 seconds).
+- **Reciprocal rank fusion:** merging two ranked lists by rank position, not by score.
+- **Amdahl's law:** if one step takes 99.5% of the time, speeding up everything else can save at
+  most 0.5%.
+- **Classification code:** the patent office's category code for a patent, such as B60B for vehicle wheels.
+- **Weekly files:** the small dataset is 64 JSON files, one per week of publications.
 
 ## Part 1: semantic search with strict filters
 
@@ -175,7 +178,7 @@ https://github.com/user-attachments/assets/20e62843-f209-4304-b254-bf545c01b237
 
 - **Normal run:** 64 jobs complete; the corrupt file failed once, with its error, instead of being
   retried; the file with bad records saved 1 and set aside 3, each with its reason. In total 641
-  unique patents.
+  unique patents: the 640 real ones plus the 1 valid record in that test file.
 - **A worker crashed mid-job:** I stopped worker A with Ctrl+C. Worker B finished the other jobs
   and took A's job once its 30-second lease ran out.
 - **Temporary errors:** with every job made to fail once, each completed on its second attempt.
@@ -234,9 +237,12 @@ splitting patents into passages and embedding them.)
 
 **What I found when running it** (940 patents, 75,018 passages)
 
-- **Processing is all embedding.** Turning text into embeddings is 99.5% of the build time, so by
-  Amdahl's law speeding up anything else could save at most 0.5%. The large data averages 147
-  passages per patent, so all ~471,000 patents would take about 26 days on a laptop CPU.
+- **Processing is all embedding.** A stage-by-stage profile (reading, cleaning, splitting,
+  embedding, filter tables) found embedding is 99.5% of the processing time, so by Amdahl's law
+  speeding up anything else could save at most 0.5%. The large data averages 147 passages per
+  patent, so all ~471,000 patents would take about 26 days on a laptop CPU at the profile's
+  rate, or about 39 days at the slower rate of a complete build, which also loads the model and
+  writes the index.
 - **Four speed-ups, none adopted.** An ONNX runtime, 8-bit quantisation, a smaller batch size and
   multi-process parallelism were each tested on a complete build. None was faster (8-bit changed
   the results), and one that looked 1.3–1.4× faster in a small test was 0.99× in a real build.
@@ -288,8 +294,8 @@ splitting patents into passages and embedding them.)
 | Part 3: scaling test | Indexes of 118, 235, 470 and 940 patents | 8,938 up to 75,018 passages |
 | Part 3: processing timing | A complete build from scratch on 20 patents from the large dataset | 2,903 passages in 141.8 s |
 
-The full large dataset was not indexed: at the measured embedding rate, all ~471,000 patents would
-take about 26 days on a laptop CPU ([Part 3](docs/PART3.md#processing-measured)).
+The full large dataset was not indexed: at the measured rates, all ~471,000 patents would take
+about 26 to 39 days on a laptop CPU ([Part 3](docs/PART3.md#processing-measured)).
 
 ## Recreate the results
 

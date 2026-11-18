@@ -37,12 +37,18 @@ All timings are on the same 8-core Windows laptop as [Part 1](PART1.md). Identic
 
 | Measure | Result |
 |---|---|
-| Share of build time spent embedding | **99.5%** (loading and filter tables are the rest) |
+| Share of processing time spent embedding (stage profile) | **99.5%** (reading, cleaning, splitting and filter tables are the rest) |
 | Passages per patent | 147 on average (median 107, 90th percentile 271), against 54 in [Part 1](PART1.md) |
 | Complete build from scratch, 20 patents (2,903 passages) | 141.8 s, of which 122.9 s embedding (about 23 passages a second) |
 | Rebuild of the 75,018-passage index when embeddings are cached | 39 s (25 s loading, 12.7 s HNSW graph) |
-| All 471,000 patents on this laptop | about 26 days |
+| All 471,000 patents on this laptop | about 26 days at the profile's rate (28.5 passages a second); about 39 days at the complete build's rate (about 20 a second) |
 | 10 million patents (the Part 2 target), embedded within a year | 1.47 billion passages at 147 each: 47 a second around the clock, twice this laptop's rate |
+
+**Two separate measurements.** The 99.5% and the 26 days come from a stage-by-stage profile: 2,000
+patents read, cleaned and split, 50 of them embedded (6,916 passages at 28.5 a second), and each
+stage's time scaled up to the whole dataset (`profile.json`). The 141.8 s is a different run of the
+real build command, which also loads the model and writes the index, so embedding is a smaller
+share of it (about 87%) and its overall rate is lower. Hence a range of 26 to 39 days, not one figure.
 
 ## Processing: four attempts, none adopted
 
