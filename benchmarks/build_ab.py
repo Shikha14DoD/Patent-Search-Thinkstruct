@@ -12,12 +12,12 @@ costs (loading libraries and the model from a cold disk cache; 93 s against
 12 s in testing), which would otherwise be charged to whichever setting ran
 first. Then it builds the same sample twice per setting with the real build command, each time
 into a fresh folder with a fresh, empty embedding cache, so nothing is reused
-and both settings do exactly the same work. Runs in the order 64, 16, 16, 64,
-so a laptop that slows down (or speeds up) during the test affects both
-settings equally. Reports the complete build time (loading, cleaning,
-splitting, model load, embedding, filter indexes, writing) and the embedding
-time alone, and checks that both settings produce the same vectors.
-Writes benchmarks/large/build_ab.json.
+and both settings do exactly the same work. Runs in the order before, after,
+after, before, so a laptop that slows down (or speeds up) during the test
+affects both settings equally. Reports the complete build time (loading,
+cleaning, splitting, model load, embedding, filter indexes, writing) and the
+embedding time alone, and checks that both settings produce the same vectors.
+Writes benchmarks/large/build_ab_workers.json by default (change with --out).
 """
 
 from __future__ import annotations
