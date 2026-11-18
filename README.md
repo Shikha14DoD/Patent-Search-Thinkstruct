@@ -139,7 +139,11 @@ the index is built and how to run it.
 
 **Demo: the search page (1.5 min)**
 
-<video src="https://raw.githubusercontent.com/Shikha14DoD/Patent-Search-Thinkstruct/main/docs/videos/ui-demo.mp4" controls width="700"></video>
+
+
+https://github.com/user-attachments/assets/20e62843-f209-4304-b254-bf545c01b237
+
+
 
 ## Part 2: implementation at scale
 
