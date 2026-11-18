@@ -141,8 +141,6 @@ the index is built and how to run it.
 
 <video src="https://raw.githubusercontent.com/Shikha14DoD/Patent-Search-Thinkstruct/main/docs/videos/ui-demo.mp4" controls width="700"></video>
 
-If the player above doesn't load, [watch/download the video directly](docs/videos/ui-demo.mp4).
-
 ## Part 2: implementation at scale
 
 **My approach: how the design and code address the problem**
