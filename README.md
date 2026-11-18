@@ -19,10 +19,10 @@ Every design choice, with the evidence behind it, is in [`DECISIONS.md`](DECISIO
 numbered decisions (D1, D2, …). Where this page cites one, it also states the reason in plain
 words, so you never need to open the log to follow the page.
 
-## How to run this project
+## Getting started
 
 Do **Step 0** once, then run any of the three parts. Each part is a short numbered list in
-[How to run](#how-to-run) further down this page:
+[Recreate the results](#recreate-the-results) further down this page:
 
 1. [Step 0: set up](#step-0-set-up-once): install Python packages and add the data.
 2. [Part 1: build the index and search](#part-1-build-the-index-and-search)
@@ -136,6 +136,12 @@ It is a retrieval tool for a person to review, not a judge of novelty or infring
 [search quality](docs/PART1.md#search-quality) and
 [filtering benchmark](docs/PART1.md#structured-filtering-and-retrieval-performance), plus how
 the index is built and how to run it.
+
+**Demo: the search page (1.5 min)**
+
+<video src="https://raw.githubusercontent.com/Shikha14DoD/Patent-Search-Thinkstruct/main/docs/videos/ui-demo.mp4" controls width="700"></video>
+
+If the player above doesn't load, [watch/download the video directly](docs/videos/ui-demo.mp4).
 
 ## Part 2: implementation at scale
 
@@ -283,7 +289,7 @@ splitting patents into passages and embedding them.)
 The full large dataset was not indexed: at the measured embedding rate, all ~471,000 patents would
 take about 26 days on a laptop CPU ([Part 3](docs/PART3.md#processing-measured)).
 
-## How to run
+## Recreate the results
 
 Run every command from the **top folder of the repository** (the folder that contains
 `README.md`). The commands below are for Windows PowerShell; the macOS and Linux differences are
